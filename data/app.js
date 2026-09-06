@@ -108,6 +108,21 @@ async function initStoredSettings() {
     document.getElementById("ledBrightnessRange").value = ledBrightPct;
     document.getElementById("ledBrightnessValue").textContent = ledBrightPct;
 
+    if (data.hasHardwareLed === false) {
+      const ledContainer = document.getElementById("ledBrightnessContainer");
+      if (ledContainer) ledContainer.style.display = "none";
+    }
+
+    if (data.hasInternalButton === false) {
+      const onboardButtonContainer = document.getElementById("disableOnboardButtonContainer");
+      if (onboardButtonContainer) onboardButtonContainer.style.display = "none";
+    }
+
+    if (data.hasAggressiveSleep === false) {
+      const aggressiveSleepContainer = document.getElementById("aggressiveSleepContainer");
+      if (aggressiveSleepContainer) aggressiveSleepContainer.style.display = "none";
+    }
+
     const lockRateRange = document.getElementById("lockReleaseRateRange");
     const lockRateVal   = document.getElementById("lockReleaseRateValue");
     if (lockRateRange && data.lockReleaseRatePerSec !== undefined) {

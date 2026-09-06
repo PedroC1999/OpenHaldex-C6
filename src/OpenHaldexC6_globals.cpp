@@ -28,10 +28,14 @@ TaskHandle_t handle_updateTriggers      = nullptr; // notified by CAN_RX wake IS
 Preferences pref; // for EEPROM / storing settings
 
 // for LED - will be initialized in setupIO()
+#ifndef OH_BOARD_T2CAN
 Freenove_ESP32_WS2812 strip = Freenove_ESP32_WS2812(1, gpio_led, led_channel, TYPE_RGB); // 1 led, gpio pin, channel, type of LED
+#endif
 
 // for mode changing (buttons & external inputs) - will be initialized in setupButtons()
+#ifndef OH_BOARD_T2CAN
 InterruptButton btnMode(gpio_mode, HIGH, GPIO_MODE_INPUT, 1000, 500, 750, 80000);         // pin, GPIO_MODE_INPUT, state when pressed, long press, autorepeat, double-click, debounce
+#endif
 InterruptButton btnMode_ext(gpio_mode_ext, HIGH, GPIO_MODE_INPUT, 1000, 500, 750, 80000); // pin, GPIO_MODE_INPUT, state when pressed, long press, autorepeat, double-click, debounce
 
 // for webServer

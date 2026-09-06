@@ -83,6 +83,7 @@ static void lpDetachWakeIsrs()
 // standby so the TWAI driver has uncontested ownership of the RX pin.
 static void lpSetTransceiverStandby(bool standby)
 {
+#ifndef OH_BOARD_T2CAN
   if (standby == lpTransceiversStandby) return;
   if (standby)
   {
@@ -99,6 +100,7 @@ static void lpSetTransceiverStandby(bool standby)
     canWakeRequest = false;
   }
   lpTransceiversStandby = standby;
+#endif
 }
 
 static void lpSuspendBackgroundTasks()
@@ -141,11 +143,14 @@ void setupIO()
 
   pinMode(gpio_hb_in, INPUT_PULLDOWN);    // gpio for handbrake in signal (pulldown so floating harness draws 0mA)
   pinMode(gpio_brake_in, INPUT_PULLDOWN); // gpio for brake in signal (pulldown so floating harness draws 0mA)
+
+#ifndef OH_BOARD_T2CAN
   pinMode(gpio_hb_out, OUTPUT);    // gpio for handbrake out signal
   pinMode(gpio_brake_out, OUTPUT); // gpio for brake out signal
 
   strip.begin();            // begin RGB LED onboard
   strip.setBrightness(255); // always full library scale; brightness controlled via color values
+#endif
 }
 
 void modeChange(void)
@@ -247,17 +252,21 @@ void modeChangeExtLongOff(void)
 void setupButtons()
 {
   // setup buttons / inputs
+#ifndef OH_BOARD_T2CAN
   btnMode.setMenuCount(0);
   btnMode.setMenuLevel(0);           // Use the functions bound to the first menu associated with the button
   btnMode.setMode(Mode_Synchronous); // can be caught in the main loop - no rush
+#endif
 
   btnMode_ext.setMenuCount(0);
   btnMode_ext.setMenuLevel(0);           // Use the functions bound to the first menu associated with the button
   btnMode_ext.setMode(Mode_Synchronous); // can be caught in the main loop - no rush
 
   // InterruptButton::m_RTOSservicerStackDepth = 4096; // Use larger values for more memory intensive functions if using Asynchronous mode.
+#ifndef OH_BOARD_T2CAN
   btnMode.bind(Event_KeyPress, 0, &modeChange);            // short press: cycle mode
   btnMode.bind(Event_LongKeyPress, 0, &resetWifi); // long press: clear WiFi password + restore default SSID, restart AP open
+#endif
 
   btnMode_ext.bind(Event_KeyPress, 0, &modeChangeExt);         // short press: cycle mode (external button)
   btnMode_ext.bind(Event_LongKeyPress, 0, &modeChangeExtLong); // long press: force mode (external button)
@@ -334,8 +343,10 @@ void updateTriggers(void *arg)
             DEBUG("Low power: no clients + CAN idle (%lu fps) - shutting down WiFi+LED%s",
                   (unsigned long)(isStandalone ? lpHaldexFps : lpChassisFps),
                   canSleepAggressive ? " + transceivers standby (ISR wake)" : "");
+#ifndef OH_BOARD_T2CAN
             strip.setLedColorData(led_channel, 0, 0, 0);
             strip.show();
+#endif
             // Aggressive: shutdown transceivers immediately and suspend background
             // periodic tasks. Wake is purely ISR-driven on the CAN_RX pins.
             if (canSleepAggressive)
@@ -398,7 +409,9 @@ void updateTriggers(void *arg)
       continue;
     }
 
+#ifndef OH_BOARD_T2CAN
     btnMode.processSyncEvents();     // Only required if using sync events
+#endif
     btnMode_ext.processSyncEvents(); // Only required if using sync events
 
     handbrakeSignalActive = digitalRead(gpio_hb_in);
@@ -407,24 +420,32 @@ void updateTriggers(void *arg)
     if (followHandbrake)
     {
       bool hbOut = invertHandbrake ? !handbrakeSignalActive : handbrakeSignalActive;
+#ifndef OH_BOARD_T2CAN
       digitalWrite(gpio_hb_out, hbOut);
+#endif
       handbrakeActive = hbOut;
     }
     else
     {
+#ifndef OH_BOARD_T2CAN
       digitalWrite(gpio_hb_out, LOW);
+#endif
       handbrakeActive = false;
     }
 
     if (followBrake)
     {
       bool brakeOut = invertBrake ? !brakeSignalActive : brakeSignalActive;
+#ifndef OH_BOARD_T2CAN
       digitalWrite(gpio_brake_out, brakeOut);
+#endif
       brakeActive = brakeOut;
     }
     else
     {
+#ifndef OH_BOARD_T2CAN
       digitalWrite(gpio_brake_out, LOW);
+#endif
       brakeActive = false;
     }
 
@@ -433,6 +454,7 @@ void updateTriggers(void *arg)
 
     if (!lowPowerMode)
     {
+#ifndef OH_BOARD_T2CAN
       switch (state.mode)
       {
       case 0:
@@ -461,6 +483,7 @@ void updateTriggers(void *arg)
         break;
       }
       strip.show(); // Update the LED strip to reflect the new colour settings
+#endif
     }
 
     // Aggressive sleep: block on a task notification with a long timeout

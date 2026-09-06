@@ -16,7 +16,9 @@
 #include <OpenHaldexC6_canID.h>
 #include <OpenHaldexC6_ver.h>
 
+#ifndef OH_BOARD_T2CAN
 #include "Freenove_WS2812_Lib_for_ESP32.h" // for RGB LED
+#endif
 #include <Preferences.h>                   // for eeprom/remember settings
 
 #include <WiFi.h>    // included for WiFi pages
@@ -100,17 +102,25 @@
 #define CAN1_TX 21 // can_1 rx
 #endif
 
+#ifndef OH_BOARD_T2CAN
 #define gpio_led 8       // gpio for led
 #define gpio_mode 19     // gpio mode button internal
+#endif
 #define gpio_mode_ext 18 // gpio mode button external
 
 #define gpio_hb_in 14    // gpio for handbrake signal in
+#ifndef OH_BOARD_T2CAN
 #define gpio_hb_out 15   // gpio for handbrake signal out
+#endif
 #define gpio_brake_in 0  // gpio for brake signal in
+#ifndef OH_BOARD_T2CAN
 #define gpio_brake_out 1 // gpio for brake signal out
+#endif
 
 // led settings
+#ifndef OH_BOARD_T2CAN
 #define led_channel 0              // channel for led
+#endif
 #define led_brightness_default 255 // compile-time default
 extern uint8_t ledBrightness;      // runtime LED brightness (0–255, persisted)
 
@@ -150,10 +160,14 @@ extern bool isMPH;       // 0 = kph, 1 = mph
 extern Preferences pref; // for EEPROM / storing settings
 
 // for LED
+#ifndef OH_BOARD_T2CAN
 extern Freenove_ESP32_WS2812 strip; // 1 led, gpio pin, channel, type of LED
+#endif
 
 // for mode changing (buttons & external inputs)
+#ifndef OH_BOARD_T2CAN
 extern InterruptButton btnMode;     // pin, GPIO_MODE_INPUT, state when pressed, long press, autorepeat, double-click, debounce
+#endif
 extern InterruptButton btnMode_ext; // pin, GPIO_MODE_INPUT, state when pressed, long press, autorepeat, double-click, debounce
 
 extern AsyncWebServer webServer;
