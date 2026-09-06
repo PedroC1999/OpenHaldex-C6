@@ -3,7 +3,39 @@
 #include <OpenHaldexC6_Analyzer.h>
 #include <OpenHaldexC6_UDS.h>
 
+
+#ifdef OH_CAN_HALDEX_MCP2515
+#include <SPI.h>
+#include <mcp2515.h>
+extern MCP2515 can_mcp;
+#endif
+
+
+#ifdef OH_CAN_HALDEX_MCP2515
+MCP2515 can_mcp(MCP2515_CS);
+#endif
+
+bool haldex_can_send(const twai_message_t& msg, TickType_t timeout_ticks) {
+#ifdef OH_CAN_HALDEX_MCP2515
+  (void)timeout_ticks;
+  struct can_frame frame = {};
+  frame.can_id = msg.identifier & 0x1FFFFFFF;
+  if (msg.extd)
+    frame.can_id |= CAN_EFF_FLAG;
+  if (msg.rtr)
+    frame.can_id |= CAN_RTR_FLAG;
+  frame.can_dlc = msg.data_length_code;
+  for (uint8_t i = 0; i < frame.can_dlc && i < 8; i++) {
+    frame.data[i] = msg.data[i];
+  }
+  return (can_mcp.sendMessage(&frame) == MCP2515::ERROR_OK);
+#else
+  return (twai_transmit_v2(twai_bus_1, &msg, timeout_ticks) == ESP_OK);
+#endif
+}
+
 void broadcastOpenHaldex(void *arg)
+
 {
   while (1)
   {
@@ -118,7 +150,9 @@ void setupCAN()
   // Allow the TWAI power domain to be powered down during light sleep; the
   // driver auto-saves/restores its registers + RX queue across sleep cycles.
   // Sleep entry itself is gated at runtime by `canSleepEnabled`.
+  #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 4, 0)
   g_config.general_flags.sleep_allow_pd = 1;
+#endif
 
   // setup CAN Controller (0) - Chassis
   g_config.controller_id = 0;
@@ -128,6 +162,23 @@ void setupCAN()
   DEBUG("CAN - Driver 0 Started");
 
   // setup CAN Controller (1) - Haldex
+#ifdef OH_CAN_HALDEX_MCP2515
+  pinMode(MCP2515_RST, OUTPUT);
+  digitalWrite(MCP2515_RST, HIGH);
+  delay(10);
+  digitalWrite(MCP2515_RST, LOW);
+  delay(10);
+  digitalWrite(MCP2515_RST, HIGH);
+  delay(10);
+  SPI.begin(MCP2515_SCLK, MCP2515_MISO, MCP2515_MOSI, MCP2515_CS);
+  if (can_mcp.reset() == MCP2515::ERROR_OK) {
+      can_mcp.setBitrate(CAN_500KBPS);
+      can_mcp.setNormalMode();
+      DEBUG("CAN haldex (MCP2515) started");
+  } else {
+      DEBUG("CAN haldex (MCP2515) init failed");
+  }
+#else
   g_config.controller_id = 1;
   g_config.tx_io = gpio_num_t(CAN1_TX);
   g_config.rx_io = gpio_num_t(CAN1_RX);
@@ -135,6 +186,7 @@ void setupCAN()
   DEBUG("CAN - Driver 1 Installed");
   ESP_ERROR_CHECK(twai_start_v2(twai_bus_1));
   DEBUG("CAN - Driver 1 Started");
+#endif
 
   // Reconfigure alerts to detect frame receive, error states and the full
   // bus-off / recovery lifecycle so canBusRecovery() can drive a clean restart.
@@ -143,8 +195,12 @@ void setupCAN()
                               TWAI_ALERT_TX_FAILED | TWAI_ALERT_BUS_OFF |
                               TWAI_ALERT_BUS_RECOVERED | TWAI_ALERT_RX_FIFO_OVERRUN;
   // Apply to both controllers explicitly (v2 driver -> per-handle alerts).
+#ifdef OH_CAN_HALDEX_MCP2515
+  bool alertsOk = (twai_reconfigure_alerts_v2(twai_bus_0, alerts_to_enable, NULL) == ESP_OK);
+#else
   bool alertsOk = (twai_reconfigure_alerts_v2(twai_bus_0, alerts_to_enable, NULL) == ESP_OK) &&
                   (twai_reconfigure_alerts_v2(twai_bus_1, alerts_to_enable, NULL) == ESP_OK);
+#endif
   if (alertsOk)
   {
     DEBUG("Reconfiguration of CAN alerts");
@@ -174,10 +230,16 @@ void setupCAN()
 void canBusRecovery()
 {
   static bool recovering[2] = {false, false}; // two TWAI controllers, track which ones we put into recovery
+#ifdef OH_CAN_HALDEX_MCP2515
+  twai_handle_t buses[1] = {twai_bus_0};
+  int num_buses = 1;
+#else
   twai_handle_t buses[2] = {twai_bus_0, twai_bus_1};
+  int num_buses = 2;
+#endif
   bool anyFault = false;
 
-  for (int i = 0; i < 2; ++i)
+  for (int i = 0; i < num_buses; ++i)
   {
     twai_handle_t bus = buses[i];
 
@@ -595,7 +657,7 @@ void parseCAN_chs(void *arg)
           tx_message_hdx.extd = rx_message_chs.extd;
           tx_message_hdx.rtr = rx_message_chs.rtr;
           tx_message_hdx.data_length_code = rx_message_chs.data_length_code;
-          twai_transmit_v2(twai_bus_1, &tx_message_hdx, (10 / portTICK_PERIOD_MS));
+          haldex_can_send(tx_message_hdx, (10 / portTICK_PERIOD_MS));
           break;
         }
         continue;
@@ -672,7 +734,7 @@ void parseCAN_chs(void *arg)
           tx_message_hdx.extd = rx_message_chs.extd;
           tx_message_hdx.rtr = rx_message_chs.rtr;
           tx_message_hdx.data_length_code = rx_message_chs.data_length_code;
-          twai_transmit_v2(twai_bus_1, &tx_message_hdx, (10 / portTICK_PERIOD_MS));
+          haldex_can_send(tx_message_hdx, (10 / portTICK_PERIOD_MS));
         }
       }
     } while (twai_receive_v2(twai_bus_0, &rx_message_chs, 0) == ESP_OK);
@@ -688,6 +750,22 @@ void parseCAN_hdx(void *arg)
     stackHDX = uxTaskGetStackHighWaterMark(NULL);
 #endif
 
+#ifdef OH_CAN_HALDEX_MCP2515
+    struct can_frame frame = {};
+    if (can_mcp.readMessage(&frame) != MCP2515::ERROR_OK) {
+      vTaskDelay(pdMS_TO_TICKS(1));
+      continue;
+    }
+    rx_message_hdx.identifier = frame.can_id & CAN_EFF_MASK;
+    rx_message_hdx.extd = (frame.can_id & CAN_EFF_FLAG) ? 1 : 0;
+    rx_message_hdx.rtr = (frame.can_id & CAN_RTR_FLAG) ? 1 : 0;
+    rx_message_hdx.data_length_code = frame.can_dlc;
+    for (uint8_t i = 0; i < frame.can_dlc && i < 8; i++) {
+      rx_message_hdx.data[i] = frame.data[i];
+    }
+    do
+    {
+#else
     if (twai_receive_v2(twai_bus_1, &rx_message_hdx, portMAX_DELAY) != ESP_OK)
     {
       vTaskDelay(pdMS_TO_TICKS(10));
@@ -695,6 +773,7 @@ void parseCAN_hdx(void *arg)
     }
     do
     {
+#endif
       lastCANHaldexTick = millis();
       ++lpHaldexFrameCount;
 
@@ -878,6 +957,10 @@ void parseCAN_hdx(void *arg)
       }
 
       twai_transmit_v2(twai_bus_0, &rx_message_hdx, (10 / portTICK_PERIOD_MS));
+#ifdef OH_CAN_HALDEX_MCP2515
+    } while (0);
+#else
     } while (twai_receive_v2(twai_bus_1, &rx_message_hdx, 0) == ESP_OK);
+#endif
   }
 }

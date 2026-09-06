@@ -1,3 +1,4 @@
+#include <OpenHaldexC6_can.h>
 #include <OpenHaldexC6_Analyzer.h>
 #include <OpenHaldexC6_defs.h>
 
@@ -231,7 +232,7 @@ static void gvretTransmitFrameFromHost() {
   if (bus == 0) {
     twai_transmit_v2(twai_bus_0, &msg, (5 / portTICK_PERIOD_MS));
   } else if (bus == 1) {
-    twai_transmit_v2(twai_bus_1, &msg, (5 / portTICK_PERIOD_MS));
+    haldex_can_send(msg, (5 / portTICK_PERIOD_MS));
   }
 }
 
