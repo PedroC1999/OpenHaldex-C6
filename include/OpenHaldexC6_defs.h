@@ -48,6 +48,9 @@
 #define detailedDebugIO 0           // set to 1 to enable detailed IO debug messages (only recommended when debugging IO-related issues, as it can be very verbose)
 #define detailedDebugArray 0        // set to 1 to enable detailed debug messages for arrays (like throttle/speed/lock curves) - only recommended when debugging issues related to those, as it can be very verbose
 #define debugCANSleep 0             // set to 1 to skip the 5-min idle/60-s count and sleep after ~2 s with no clients
+#ifndef OH_CAN_DIAGNOSTICS
+#define OH_CAN_DIAGNOSTICS 0        // target-specific native CAN diagnostics
+#endif
 
 // refresh rates
 #define eepRefresh 2000           // EEPROM save in ms
@@ -56,7 +59,7 @@
 #define updateTriggersRefresh 500 // change IO refresh rate in ms
 
 // debugging macros
-#ifdef enableDebug
+#if enableDebug || detailedDebug || detailedDebugCAN || detailedDebugWiFi || detailedDebugEEP || detailedDebugIO || OH_CAN_DIAGNOSTICS
 #define DEBUG(x, ...) Serial.printf(x "\n", ##__VA_ARGS__)
 #define DEBUG_(x, ...) Serial.printf(x, ##__VA_ARGS__)
 #else

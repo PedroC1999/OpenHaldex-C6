@@ -2,7 +2,7 @@
 #include <OpenHaldexC6_defs.h>
 
 // Current firmware version
-#define FW_VERSION "8.00.3" // update this with every firmware release AND change .html version query param to force cache refresh of web UI
+#define FW_VERSION "8.01.0" // update this with every firmware release AND change .html version query param to force cache refresh of web UI
 
 /*
 Version Control:

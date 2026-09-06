@@ -200,19 +200,31 @@ void setupCAN()
   g_config.rx_queue_len = 2048; //<TWAI_GENERAL_CONFIG_DEFAULT default is 5, use this to increase if needed // 4096
   // g_config.intr_flags = ESP_INTR_FLAG_IRAM;
 
-  // Allow the TWAI power domain to be powered down during light sleep; the
-  // driver auto-saves/restores its registers + RX queue across sleep cycles.
-  // Sleep entry itself is gated at runtime by `canSleepEnabled`.
-  #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 4, 0)
+  // The T-2CAN reference firmware keeps its native TWAI controller powered.
+  // Do the same here: losing the peripheral during automatic light sleep can
+  // leave the chassis receiver silent even though the MCP2515 remains active.
+  #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 4, 0) && !defined(OH_BOARD_T2CAN)
   g_config.general_flags.sleep_allow_pd = 1;
 #endif
 
   // setup CAN Controller (0) - Chassis
   g_config.controller_id = 0;
+#if OH_CAN_DIAGNOSTICS
+  DEBUG("[CAN-CHS] init ctl=0 tx=%d rx=%d mode=NO_ACK bitrate=500k txq=%d rxq=%d",
+        CAN0_TX, CAN0_RX, g_config.tx_queue_len, g_config.rx_queue_len);
+#endif
   ESP_ERROR_CHECK(twai_driver_install_v2(&g_config, &t_config, &f_config, &twai_bus_0));
   DEBUG("CAN - Driver 0 Installed");
   ESP_ERROR_CHECK(twai_start_v2(twai_bus_0));
   DEBUG("CAN - Driver 0 Started");
+#if OH_CAN_DIAGNOSTICS
+  twai_status_info_t initialChassisStatus = {};
+  if (twai_get_status_info_v2(twai_bus_0, &initialChassisStatus) == ESP_OK)
+  {
+    DEBUG("[CAN-CHS] started state=%d txerr=%u rxerr=%u", (int)initialChassisStatus.state,
+          initialChassisStatus.tx_error_counter, initialChassisStatus.rx_error_counter);
+  }
+#endif
 
   // setup CAN Controller (1) - Haldex
 #ifdef OH_CAN_HALDEX_MCP2515
@@ -303,6 +315,9 @@ void canBusRecovery()
   int num_buses = 2;
 #endif
   bool anyFault = false;
+#if OH_CAN_DIAGNOSTICS
+  static uint32_t lastChassisReportMs = 0;
+#endif
 
   for (int i = 0; i < num_buses; ++i)
   {
@@ -312,6 +327,16 @@ void canBusRecovery()
     uint32_t alerts = 0;
     if (twai_read_alerts_v2(bus, &alerts, 0) == ESP_OK)
     {
+#if OH_CAN_DIAGNOSTICS
+      if (alerts != 0)
+      {
+        DEBUG("[CAN-CHS] alerts=0x%08lX buserr=%d errpass=%d txfail=%d busoff=%d rxqfull=%d overrun=%d",
+              (unsigned long)alerts,
+              (alerts & TWAI_ALERT_BUS_ERROR) != 0, (alerts & TWAI_ALERT_ERR_PASS) != 0,
+              (alerts & TWAI_ALERT_TX_FAILED) != 0, (alerts & TWAI_ALERT_BUS_OFF) != 0,
+              (alerts & TWAI_ALERT_RX_QUEUE_FULL) != 0, (alerts & TWAI_ALERT_RX_FIFO_OVERRUN) != 0);
+      }
+#endif
       if (alerts & (TWAI_ALERT_BUS_ERROR | TWAI_ALERT_ERR_PASS |
                     TWAI_ALERT_TX_FAILED | TWAI_ALERT_RX_QUEUE_FULL |
                     TWAI_ALERT_RX_FIFO_OVERRUN))
@@ -323,6 +348,17 @@ void canBusRecovery()
     twai_status_info_t status;
     if (twai_get_status_info_v2(bus, &status) != ESP_OK)
       continue;
+
+#if OH_CAN_DIAGNOSTICS
+    if ((millis() - lastChassisReportMs) >= 1000)
+    {
+      lastChassisReportMs = millis();
+      const long rxAgeMs = lastCANChassisTick > 0 ? (long)(millis() - lastCANChassisTick) : -1;
+      DEBUG("[CAN-CHS] state=%d rxq=%lu missed=%lu overrun=%lu txerr=%u rxerr=%u buserr=%lu rx-age=%ldms",
+            (int)status.state, status.msgs_to_rx, status.rx_missed_count, status.rx_overrun_count,
+            status.tx_error_counter, status.rx_error_counter, status.bus_error_count, rxAgeMs);
+    }
+#endif
 
     switch (status.state)
     {

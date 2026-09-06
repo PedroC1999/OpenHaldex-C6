@@ -288,6 +288,16 @@ void startHaldexLearn()
     return; // already running
   }
 
+  // Learning adjusts chassis frames as they are forwarded to the Haldex.  It
+  // cannot produce meaningful data unless both sides are currently receiving
+  // frames; otherwise it would silently save an all-zero calibration table.
+  if (!isStandalone && (!hasCANChassis || !hasCANHaldex))
+  {
+    haldexLearnTableValid = false;
+    haldexLearnStep = 102; // completed/failed: no usable feedback source
+    return;
+  }
+
   memset(haldexLearnTable, 0, sizeof(haldexLearnTable));
   haldexLearnCancel = false;
   haldexLearnStep = 0;

@@ -17,7 +17,7 @@ Version: 8.00.3
 
 void setup()
 {
-#if enableDebug || detailedDebug || detailedDebugCAN || detailedDebugWiFi || detailedDebugEEP || detailedDebugIO
+#if enableDebug || detailedDebug || detailedDebugCAN || detailedDebugWiFi || detailedDebugEEP || detailedDebugIO || OH_CAN_DIAGNOSTICS
   Serial.begin(500000);                // start serial at a high baud rate for debugging
   Serial.setTxTimeoutMs(10);           // set a small timeout for Serial writes to prevent blocking if the Serial Monitor is not open
   DEBUG("OpenHaldex-C6 Launching..."); // debug message to indicate startup
@@ -34,6 +34,10 @@ void setup()
   setupOTA();       // setup Over-the-Air Updates
 
   // Power management: when CAN sleep is enabled, scale CPU frequency down
+  // The original OpenHaldex-S3 T-2CAN firmware does not enable automatic
+  // light sleep. Keep the native chassis TWAI controller continuously awake
+  // on this target; this is a reliability preference, not a power saving one.
+#ifndef OH_BOARD_T2CAN
   if (canSleepEnabled)
   {
     esp_pm_config_t pm_cfg = {
@@ -48,6 +52,7 @@ void setup()
       DEBUG("ESP Power Management Failed: %d (continuing without CPU frequency scaling)", (int)pm_err);
     }
   }
+#endif
 
   if (needsFirmwareConfirmation())
   {
