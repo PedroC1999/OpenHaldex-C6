@@ -286,6 +286,16 @@ static void settingsOutgoing(AsyncWebServerRequest *request)
     data["extButtonForceMode"] = extBtnForceMode;
     data["hazardForceMode"] = hazardForceMode;
 
+#ifdef OH_BOARD_T2CAN
+    data["hasHardwareLed"] = false;
+    data["hasInternalButton"] = false;
+    data["hasAggressiveSleep"] = false;
+#else
+    data["hasHardwareLed"] = true;
+    data["hasInternalButton"] = true;
+    data["hasAggressiveSleep"] = true;
+#endif
+
     data["disableOnboardButton"] = disableOnboardButton;
     data["disableExternalButton"] = disableExternalButton;
     data["fixHunting"] = fixHunting;

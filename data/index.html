@@ -445,7 +445,7 @@
                     </label>
                     <p class="hint">Polls the Haldex ECU for live data using whatever generation is set (Gen5 = UDS; Gen2/4 = KWP2000/TP2.0). Requires Haldex CAN healthy.</p>
                     <p class="hint">Note: Occupies the diagnostic channel — leave OFF when using VCDS or other diagnostic tools.</p>
-                    <label class="toggle">
+                    <label class="toggle" id="disableOnboardButtonContainer">
                         <input type="checkbox" id="disableOnboardButton">
                         <span class="toggle-slider"></span>
                         <span class="toggle-label">Disable Onboard Button</span>
@@ -461,12 +461,14 @@
                         <span class="toggle-label">Enable CAN Sleep</span>
                     </label>
                     <p class="hint">After 5 min idle with no WiFi clients and both CAN buses silent, sleep until a CAN frame arrives. The first wake frame may be lost.</p>
-                    <label class="toggle">
-                        <input type="checkbox" id="canSleepAggressive">
-                        <span class="toggle-slider"></span>
-                        <span class="toggle-label">Enable CAN Sleep (Aggressive)</span>
-                    </label>
-                    <p class="hint">Additionally parks the CAN transceivers in standby while sleeping, drops CPU freq. to 10MHz, and lowers WiFi AP TX power. Bus activity wakes the transceivers via GPIO interrupt within microseconds; a 2s safety-net probe runs as backup.</p>
+                    <div id="aggressiveSleepContainer">
+                        <label class="toggle">
+                            <input type="checkbox" id="canSleepAggressive">
+                            <span class="toggle-slider"></span>
+                            <span class="toggle-label">Enable CAN Sleep (Aggressive)</span>
+                        </label>
+                        <p class="hint">Additionally parks the CAN transceivers in standby while sleeping, drops CPU freq. to 10MHz, and lowers WiFi AP TX power. Bus activity wakes the transceivers via GPIO interrupt within microseconds; a 2s safety-net probe runs as backup.</p>
+                    </div>
                     <div class="brightness-row">
                         <span class="toggle-label">LP Wake Threshold</span>
                         <div class="brightness-controls">
@@ -483,7 +485,7 @@
                             <span>Haldex: <span id="lpHaldexFrameRate">--</span> fps</span>
                         </div>
                     </div>
-                    <div class="brightness-row">
+                    <div class="brightness-row" id="ledBrightnessContainer">
                         <span class="toggle-label">LED Brightness</span>
                         <div class="brightness-controls">
                             <input type="range" id="ledBrightnessRange" min="0" max="100" step="5" value="100" class="slider-inline">
