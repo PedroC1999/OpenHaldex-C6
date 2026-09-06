@@ -9,9 +9,14 @@ extern volatile bool haldexLearnActive;
 extern volatile bool haldexLearnCancel;
 extern volatile uint8_t haldexLearnStep;
 extern volatile uint8_t haldexLearnCF;
+extern bool haldexLearnRestorePending;
+extern bool haldexLearnRestoreDisableController;
+extern openhaldex_mode_t haldexLearnRestoreMode;
+extern uint8_t haldexLearnRestoreLastMode;
 
 float get_lock_target_adjustment();
 static float get_expert_lock_target();
 uint8_t get_lock_target_adjusted_value(uint8_t value, bool invert);
 void getLockData(twai_message_t& rx_message_chs);
-void startHaldexLearn();
+bool startHaldexLearn();
+void restoreHaldexLearnState();

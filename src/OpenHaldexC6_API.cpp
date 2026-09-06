@@ -809,17 +809,21 @@ void setupAPI()
     // POST /api/learn/start - begin the learn sweep
     webServer.on("/api/learn/start", HTTP_POST, [](AsyncWebServerRequest *request)
                  {
-                     if (!hasCANHaldex)
+                     if (!hasCANChassis || !hasCANHaldex)
                      {
                          JsonDocument resp;
                          resp["ok"]    = false;
-                         resp["error"] = "No Haldex CAN data available";
+                         resp["error"] = "Both chassis and Haldex CAN data are required";
                          sendJSON(request, 200, resp);
                          return;
                      }
-                     startHaldexLearn();
+                     const bool started = startHaldexLearn();
                      JsonDocument resp;
-                     resp["ok"] = true;
+                     resp["ok"] = started;
+                     if (!started)
+                     {
+                         resp["error"] = "Failed to start learn task";
+                     }
                      sendJSON(request, 200, resp); });
 
     // POST /api/learn/cancel - abort an in-progress learn sweep

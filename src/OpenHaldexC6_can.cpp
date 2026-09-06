@@ -46,6 +46,7 @@ bool haldex_can_receive(twai_message_t &message)
 
 bool haldex_can_send(const twai_message_t& msg, TickType_t timeout_ticks) {
 #ifdef OH_CAN_HALDEX_MCP2515
+  (void)timeout_ticks;
   if (!mcp2515Ready)
     return false;
 
@@ -59,22 +60,15 @@ bool haldex_can_send(const twai_message_t& msg, TickType_t timeout_ticks) {
   for (uint8_t i = 0; i < frame.can_dlc && i < 8; i++) {
     frame.data[i] = msg.data[i];
   }
-  // MCP2515 provides only three TX buffers, unlike the large native TWAI
-  // queue. Honour the caller's timeout so a transiently full controller does
-  // not silently discard a bridged frame.
-  const TickType_t started = xTaskGetTickCount();
-  do {
-    MCP2515::ERROR result = MCP2515::ERROR_FAIL;
-    if (mcp2515Mutex != nullptr && xSemaphoreTake(mcp2515Mutex, 0) == pdTRUE) {
-      result = can_mcp.sendMessage(&frame);
-      xSemaphoreGive(mcp2515Mutex);
-    }
-    if (result == MCP2515::ERROR_OK)
-      return true;
-    if (timeout_ticks == 0 || (xTaskGetTickCount() - started) >= timeout_ticks)
-      return false;
-    vTaskDelay(1);
-  } while (true);
+  // Match OpenHaldex-S3: forwarding must never block the high-priority
+  // chassis receive task. The MCP2515 has only three TX buffers; if they are
+  // occupied, discard this frame rather than delaying all subsequent chassis
+  // traffic for up to the caller's timeout.
+  if (mcp2515Mutex == nullptr || xSemaphoreTake(mcp2515Mutex, 0) != pdTRUE)
+    return false;
+  const MCP2515::ERROR result = can_mcp.sendMessage(&frame);
+  xSemaphoreGive(mcp2515Mutex);
+  return result == MCP2515::ERROR_OK;
 #else
   return (twai_transmit_v2(twai_bus_1, &msg, timeout_ticks) == ESP_OK);
 #endif
@@ -209,6 +203,10 @@ void setupCAN()
 
   // setup CAN Controller (0) - Chassis
   g_config.controller_id = 0;
+  // Explicit as in OpenHaldex-S3, even though the default macro also carries
+  // these pins. This avoids relying on a framework-specific macro layout.
+  g_config.tx_io = gpio_num_t(CAN0_TX);
+  g_config.rx_io = gpio_num_t(CAN0_RX);
 #if OH_CAN_DIAGNOSTICS
   DEBUG("[CAN-CHS] init ctl=0 tx=%d rx=%d mode=NO_ACK bitrate=500k txq=%d rxq=%d",
         CAN0_TX, CAN0_RX, g_config.tx_queue_len, g_config.rx_queue_len);

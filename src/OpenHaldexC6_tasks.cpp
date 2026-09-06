@@ -10,7 +10,7 @@
 void haldexLearnTask(void *arg)
 {
   const uint32_t settleMs = 300;
-  uint8_t peak = 0; // highest engagement recorded so far (monotonic hold)
+  uint8_t lastValid = 0;
 
   for (uint16_t cf = 0; cf <= 100; cf++)
   {
@@ -24,23 +24,16 @@ void haldexLearnTask(void *arg)
 
     vTaskDelay(settleMs / portTICK_PERIOD_MS);
 
-    uint8_t eng = received_haldex_engagement;
-
-    // Engagement must rise (or plateau) as the requested lock climbs - it can
-    // never physically fall. A reading below the running peak is a data fault
-    // (e.g. a bad byte at the top end that returns 0 or a lower value), so hold
-    // the highest lock achieved so far instead of saving the drop. This keeps
-    // "the last available highest lock" as the learned value for higher requests.
-    if (eng < peak)
+    const uint8_t eng = constrain(received_haldex_engagement, 0, 100);
+    if (eng == 0 && cf > 0)
     {
-      eng = peak; // last available highest lock remains
+      haldexLearnTable[cf] = lastValid;
     }
     else
     {
-      peak = eng;
+      lastValid = eng;
+      haldexLearnTable[cf] = eng;
     }
-
-    haldexLearnTable[cf] = eng;
   }
 
   if (!haldexLearnCancel)
@@ -54,9 +47,14 @@ void haldexLearnTask(void *arg)
     haldexLearnTableValid = anyNonZero;
     haldexLearnStep = anyNonZero ? 101 : 102; // 101 = complete OK, 102 = complete but no data
   }
+  else
+  {
+    haldexLearnTableValid = false;
+  }
 
   haldexLearnActive = false;
   haldexLearnCF     = 0;
+  restoreHaldexLearnState();
   vTaskDelete(NULL);
 }
 

@@ -401,6 +401,14 @@ volatile bool haldexLearnActive = false;
 volatile bool haldexLearnCancel = false;
 volatile uint8_t haldexLearnStep = 0;   // 0-100 = current step, 101 = complete
 volatile uint8_t haldexLearnCF = 0;     // current correction factor override during learn
+// A learn may temporarily enable the controller and select 50:50, exactly as
+// the known-good S3 implementation does.  Keep enough state to restore the
+// user's configuration whether the sweep completes, is cancelled, or fails
+// to create its task.
+bool haldexLearnRestorePending = false;
+bool haldexLearnRestoreDisableController = false;
+openhaldex_mode_t haldexLearnRestoreMode = MODE_STOCK;
+uint8_t haldexLearnRestoreLastMode = MODE_STOCK;
 uint8_t tempCounter1;
 uint16_t tempCounter2;
 

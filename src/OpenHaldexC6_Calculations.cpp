@@ -281,11 +281,24 @@ uint8_t get_lock_target_adjusted_value(uint8_t value, bool invert)
   return (invert ? 0xFE : 0x00); // if lock not enabled, return 0 (or inverted)
 }
 
-void startHaldexLearn()
+void restoreHaldexLearnState()
+{
+  if (!haldexLearnRestorePending)
+  {
+    return;
+  }
+
+  disableController = haldexLearnRestoreDisableController;
+  state.mode = haldexLearnRestoreMode;
+  lastMode = haldexLearnRestoreLastMode;
+  haldexLearnRestorePending = false;
+}
+
+bool startHaldexLearn()
 {
   if (haldexLearnActive)
   {
-    return; // already running
+    return true; // already running
   }
 
   // Learning adjusts chassis frames as they are forwarded to the Haldex.  It
@@ -295,7 +308,21 @@ void startHaldexLearn()
   {
     haldexLearnTableValid = false;
     haldexLearnStep = 102; // completed/failed: no usable feedback source
-    return;
+    return false;
+  }
+
+  // Match the S3 learn contract: a sweep always uses a known, enabled 50:50
+  // control state, then puts the user's disabled/stock state back afterwards.
+  // Without this, Learn can enter the frame-rewrite path in an arbitrary mode.
+  if (disableController || state.mode == MODE_STOCK)
+  {
+    haldexLearnRestorePending = true;
+    haldexLearnRestoreDisableController = disableController;
+    haldexLearnRestoreMode = state.mode;
+    haldexLearnRestoreLastMode = lastMode;
+    disableController = false;
+    state.mode = MODE_5050;
+    lastMode = MODE_5050;
   }
 
   memset(haldexLearnTable, 0, sizeof(haldexLearnTable));
@@ -304,7 +331,15 @@ void startHaldexLearn()
   haldexLearnCF = 0;
   haldexLearnActive = true;
 
-  xTaskCreate(haldexLearnTask, "haldexLearn", 4096, nullptr, 1, nullptr);
+  if (xTaskCreate(haldexLearnTask, "haldexLearn", 4096, nullptr, 1, nullptr) != pdPASS)
+  {
+    haldexLearnActive = false;
+    haldexLearnStep = 102;
+    restoreHaldexLearnState();
+    return false;
+  }
+
+  return true;
 }
 
 void getLockData(twai_message_t &rx_message_chs)
@@ -361,6 +396,98 @@ void getLockData(twai_message_t &rx_message_chs)
         }
       }
     }
+  }
+
+  // The 0CQ normal-control profile contains some vehicle-specific experiments
+  // (notably Getriebe_11, EPB_01, and a fixed high ESP_10 request).  Those are
+  // not part of the proven S3 learn sweep and can upset an OEM gateway when
+  // Learn starts at CF=0.  During Learn, use the S3's six-frame Gen5 profile
+  // exactly; normal C6 control remains unchanged outside a sweep.
+  if (haldexLearnActive && haldexGeneration == 50)
+  {
+    switch (rx_message_chs.identifier)
+    {
+    case ESP_19:
+      rx_message_chs.data[0] = get_lock_target_adjusted_value(ESP_19_counter2, false);
+      rx_message_chs.data[1] = get_lock_target_adjusted_value(ESP_19_counter, false);
+      rx_message_chs.data[2] = get_lock_target_adjusted_value(ESP_19_counter2, false);
+      rx_message_chs.data[3] = get_lock_target_adjusted_value(ESP_19_counter, false);
+      rx_message_chs.data[4] = get_lock_target_adjusted_value((uint8_t)(ESP_19_counter2 + 0xCA), false);
+      rx_message_chs.data[5] = get_lock_target_adjusted_value(ESP_19_counter, false);
+      rx_message_chs.data[6] = get_lock_target_adjusted_value((uint8_t)(ESP_19_counter2 + 0xCA), false);
+      rx_message_chs.data[7] = get_lock_target_adjusted_value(ESP_19_counter, false);
+      if (++ESP_19_counter > 0x1A) ESP_19_counter = 0x01;
+      if (++ESP_19_counter2 > 0x0E) ESP_19_counter2 = 0x00;
+      break;
+
+    case MOTOR_12:
+      rx_message_chs.data[0] = 0x00;
+      rx_message_chs.data[1] = MOTOR_12_counter;
+      rx_message_chs.data[2] = 0x00;
+      rx_message_chs.data[3] = 0x00;
+      rx_message_chs.data[4] = 0x00;
+      rx_message_chs.data[5] = 0x64;
+      rx_message_chs.data[6] = 0x0F;
+      rx_message_chs.data[7] = get_lock_target_adjusted_value(MOTOR_12_counter, false);
+      rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_0A8);
+      if (++MOTOR_12_counter > 0x7F) MOTOR_12_counter = 0x70;
+      break;
+
+    case MOTOR_11:
+      rx_message_chs.data[0] = 0x00;
+      rx_message_chs.data[1] = MOTOR_11_counter;
+      rx_message_chs.data[2] = 0xFA;
+      rx_message_chs.data[3] = 0xFA;
+      rx_message_chs.data[4] = 0x00;
+      rx_message_chs.data[5] = 0xFA;
+      rx_message_chs.data[6] = get_lock_target_adjusted_value(0xFA, false);
+      rx_message_chs.data[7] = get_lock_target_adjusted_value(0xFA, false);
+      rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_0A7);
+      if (++MOTOR_11_counter > 0x4F) MOTOR_11_counter = 0x40;
+      break;
+
+    case ESP_14:
+      rx_message_chs.data[0] = 0x00;
+      rx_message_chs.data[1] = ESP_14_counter;
+      rx_message_chs.data[2] = 0x00;
+      rx_message_chs.data[3] = 0x00;
+      rx_message_chs.data[4] = 0x00;
+      rx_message_chs.data[5] = 0x00;
+      rx_message_chs.data[6] = 0x00;
+      rx_message_chs.data[7] = get_lock_target_adjusted_value(0xFE, false);
+      rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_08A);
+      if (++ESP_14_counter > 0x1F) ESP_14_counter = 0x10;
+      break;
+
+    case ESP_10:
+      rx_message_chs.data_length_code = 8;
+      rx_message_chs.data[0] = 0x00;
+      rx_message_chs.data[1] = ESP_10_counter;
+      rx_message_chs.data[2] = 0x01;
+      rx_message_chs.data[3] = 0x04;
+      rx_message_chs.data[4] = 0x00;
+      rx_message_chs.data[5] = 0x40;
+      rx_message_chs.data[6] = 0x00;
+      rx_message_chs.data[7] = get_lock_target_adjusted_value(ESP_10_counter, false);
+      rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_116);
+      if (++ESP_10_counter > 0x0F) ESP_10_counter = 0x00;
+      break;
+
+    case ESP_05:
+      rx_message_chs.data_length_code = 8;
+      rx_message_chs.data[0] = 0x00;
+      rx_message_chs.data[1] = ESP_05_counter;
+      rx_message_chs.data[2] = 0x64;
+      rx_message_chs.data[3] = 0xC0;
+      rx_message_chs.data[4] = 0x00;
+      rx_message_chs.data[5] = 0x00;
+      rx_message_chs.data[6] = 0xFD;
+      rx_message_chs.data[7] = 0x00;
+      rx_message_chs.data[0] = calcChecksum(rx_message_chs.data, ID_SEQ_106);
+      if (++ESP_05_counter > 0x8F) ESP_05_counter = 0x80;
+      break;
+    }
+    return;
   }
 
   // begin frame parsing / editting
@@ -614,16 +741,10 @@ void getLockData(twai_message_t &rx_message_chs)
       break;
 
     case BRAKES4_ID:
-      if (haldexLearnActive || state.mode != MODE_5050)
-      {
-        appliedTorque = get_lock_target_adjusted_value(0x7F, false); // regulated clamp
-      }
-      else
-      {
-        appliedTorque = get_lock_target_adjusted_value(0xFE, false); // full clamp (27 bar)
-      }
-
-      rx_message_chs.data[0] = appliedTorque;
+      // Use the same full-scale Gen4 request as the known-good S3 path.
+      // The former C6 learn-only 0x7F variant produced a different sweep
+      // payload from S3 on the ABS coupling-moment frame.
+      rx_message_chs.data[0] = get_lock_target_adjusted_value(0xFE, false);
       rx_message_chs.data[1] = 0x00;
       rx_message_chs.data[2] = 0x00;
       rx_message_chs.data[3] = 0x64;
