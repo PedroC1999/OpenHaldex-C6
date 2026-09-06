@@ -83,6 +83,12 @@ static void lpDetachWakeIsrs()
 // standby so the TWAI driver has uncontested ownership of the RX pin.
 static void lpSetTransceiverStandby(bool standby)
 {
+#ifdef OH_BOARD_T2CAN
+  // Neither T-2CAN transceiver exposes a standby/slope-control GPIO. Keep the
+  // CAN controllers running; the regular low-power Wi-Fi behaviour remains.
+  (void)standby;
+  return;
+#else
   if (standby == lpTransceiversStandby) return;
   if (standby)
   {
@@ -99,6 +105,7 @@ static void lpSetTransceiverStandby(bool standby)
     canWakeRequest = false;
   }
   lpTransceiversStandby = standby;
+#endif
 }
 
 static void lpSuspendBackgroundTasks()
@@ -134,18 +141,22 @@ static void lpResumeBackgroundTasks()
 void setupIO()
 {
   // using the TCAN1044 for CAN control
+#if !defined(OH_BOARD_T2CAN)
   pinMode(CAN0_RS, OUTPUT);   // gpio for controlling can_0 state - enabled or disabled
   pinMode(CAN1_RS, OUTPUT);   // gpio for controlling can_0 slope - enabled or disabled
   digitalWrite(CAN0_RS, LOW); // set chip enable
   digitalWrite(CAN1_RS, LOW); // set chip enable
+#endif
 
   pinMode(gpio_hb_in, INPUT_PULLDOWN);    // gpio for handbrake in signal (pulldown so floating harness draws 0mA)
   pinMode(gpio_brake_in, INPUT_PULLDOWN); // gpio for brake in signal (pulldown so floating harness draws 0mA)
   pinMode(gpio_hb_out, OUTPUT);    // gpio for handbrake out signal
   pinMode(gpio_brake_out, OUTPUT); // gpio for brake out signal
 
+#if OH_HAS_RGB_LED
   strip.begin();            // begin RGB LED onboard
   strip.setBrightness(255); // always full library scale; brightness controlled via color values
+#endif
 }
 
 void modeChange(void)
@@ -334,8 +345,10 @@ void updateTriggers(void *arg)
             DEBUG("Low power: no clients + CAN idle (%lu fps) - shutting down WiFi+LED%s",
                   (unsigned long)(isStandalone ? lpHaldexFps : lpChassisFps),
                   canSleepAggressive ? " + transceivers standby (ISR wake)" : "");
+#if OH_HAS_RGB_LED
             strip.setLedColorData(led_channel, 0, 0, 0);
             strip.show();
+#endif
             // Aggressive: shutdown transceivers immediately and suspend background
             // periodic tasks. Wake is purely ISR-driven on the CAN_RX pins.
             if (canSleepAggressive)
@@ -433,6 +446,7 @@ void updateTriggers(void *arg)
 
     if (!lowPowerMode)
     {
+#if OH_HAS_RGB_LED
       switch (state.mode)
       {
       case 0:
@@ -461,6 +475,7 @@ void updateTriggers(void *arg)
         break;
       }
       strip.show(); // Update the LED strip to reflect the new colour settings
+#endif
     }
 
     // Aggressive sleep: block on a task notification with a long timeout

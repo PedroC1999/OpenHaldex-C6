@@ -12,12 +12,43 @@ extern MCP2515 can_mcp;
 
 
 #ifdef OH_CAN_HALDEX_MCP2515
-MCP2515 can_mcp(MCP2515_CS);
+// Match the known-working OpenHaldex-S3 T-2CAN configuration explicitly:
+// 10 MHz on the Arduino global SPI bus.
+MCP2515 can_mcp(MCP2515_CS, 10000000, &SPI);
+static bool mcp2515Ready = false;
+// The chassis parser forwards frames while the Haldex parser (and UDS) reads
+// from this SPI-connected controller.  MCP2515 library calls are multi-byte
+// SPI transactions, so they must not overlap between FreeRTOS tasks.
+static SemaphoreHandle_t mcp2515Mutex = nullptr;
+
+bool haldex_can_receive(twai_message_t &message)
+{
+  if (!mcp2515Ready)
+    return false;
+
+  struct can_frame frame = {};
+  if (mcp2515Mutex == nullptr || xSemaphoreTake(mcp2515Mutex, 0) != pdTRUE)
+    return false;
+  const MCP2515::ERROR result = can_mcp.readMessage(&frame);
+  xSemaphoreGive(mcp2515Mutex);
+  if (result != MCP2515::ERROR_OK)
+    return false;
+
+  message.identifier = frame.can_id & CAN_EFF_MASK;
+  message.extd = (frame.can_id & CAN_EFF_FLAG) ? 1 : 0;
+  message.rtr = (frame.can_id & CAN_RTR_FLAG) ? 1 : 0;
+  message.data_length_code = frame.can_dlc;
+  for (uint8_t i = 0; i < frame.can_dlc && i < 8; i++)
+    message.data[i] = frame.data[i];
+  return true;
+}
 #endif
 
 bool haldex_can_send(const twai_message_t& msg, TickType_t timeout_ticks) {
 #ifdef OH_CAN_HALDEX_MCP2515
-  (void)timeout_ticks;
+  if (!mcp2515Ready)
+    return false;
+
   struct can_frame frame = {};
   frame.can_id = msg.identifier & 0x1FFFFFFF;
   if (msg.extd)
@@ -28,11 +59,33 @@ bool haldex_can_send(const twai_message_t& msg, TickType_t timeout_ticks) {
   for (uint8_t i = 0; i < frame.can_dlc && i < 8; i++) {
     frame.data[i] = msg.data[i];
   }
-  return (can_mcp.sendMessage(&frame) == MCP2515::ERROR_OK);
+  // MCP2515 provides only three TX buffers, unlike the large native TWAI
+  // queue. Honour the caller's timeout so a transiently full controller does
+  // not silently discard a bridged frame.
+  const TickType_t started = xTaskGetTickCount();
+  do {
+    MCP2515::ERROR result = MCP2515::ERROR_FAIL;
+    if (mcp2515Mutex != nullptr && xSemaphoreTake(mcp2515Mutex, 0) == pdTRUE) {
+      result = can_mcp.sendMessage(&frame);
+      xSemaphoreGive(mcp2515Mutex);
+    }
+    if (result == MCP2515::ERROR_OK)
+      return true;
+    if (timeout_ticks == 0 || (xTaskGetTickCount() - started) >= timeout_ticks)
+      return false;
+    vTaskDelay(1);
+  } while (true);
 #else
   return (twai_transmit_v2(twai_bus_1, &msg, timeout_ticks) == ESP_OK);
 #endif
 }
+
+#ifndef OH_CAN_HALDEX_MCP2515
+bool haldex_can_receive(twai_message_t &message)
+{
+  return twai_receive_v2(twai_bus_1, &message, 0) == ESP_OK;
+}
+#endif
 
 void broadcastOpenHaldex(void *arg)
 
@@ -163,6 +216,12 @@ void setupCAN()
 
   // setup CAN Controller (1) - Haldex
 #ifdef OH_CAN_HALDEX_MCP2515
+  mcp2515Mutex = xSemaphoreCreateMutex();
+  if (mcp2515Mutex == nullptr) {
+      mcp2515Ready = false;
+      DEBUG("CAN haldex (MCP2515) mutex creation failed");
+      return;
+  }
   pinMode(MCP2515_RST, OUTPUT);
   digitalWrite(MCP2515_RST, HIGH);
   delay(10);
@@ -171,11 +230,17 @@ void setupCAN()
   digitalWrite(MCP2515_RST, HIGH);
   delay(10);
   SPI.begin(MCP2515_SCLK, MCP2515_MISO, MCP2515_MOSI, MCP2515_CS);
-  if (can_mcp.reset() == MCP2515::ERROR_OK) {
-      can_mcp.setBitrate(CAN_500KBPS);
-      can_mcp.setNormalMode();
+  xSemaphoreTake(mcp2515Mutex, portMAX_DELAY);
+  const bool mcpInitialized =
+      can_mcp.reset() == MCP2515::ERROR_OK &&
+      can_mcp.setBitrate(CAN_500KBPS) == MCP2515::ERROR_OK &&
+      can_mcp.setNormalMode() == MCP2515::ERROR_OK;
+  xSemaphoreGive(mcp2515Mutex);
+  if (mcpInitialized) {
+      mcp2515Ready = true;
       DEBUG("CAN haldex (MCP2515) started");
   } else {
+      mcp2515Ready = false;
       DEBUG("CAN haldex (MCP2515) init failed");
   }
 #else
@@ -332,7 +397,7 @@ void parseCAN_chs(void *arg)
     do
     {
       lastCANChassisTick = millis();
-      ++lpChassisFrameCount;
+      lpChassisFrameCount = lpChassisFrameCount + 1;
 
       // External diagnostic-tool detection (auto-pause of live polling).
       // A scanner addresses the Haldex from the chassis side; these request IDs
@@ -371,7 +436,7 @@ void parseCAN_chs(void *arg)
       if (analyzerMode || analyzerSerial)
       {
         analyzerQueueFrame(rx_message_chs, 0);
-        transmitFrameCopy(twai_bus_1, rx_message_chs, tx_message_hdx);
+        haldex_can_send(rx_message_chs, (10 / portTICK_PERIOD_MS));
         continue;
       }
 
@@ -751,17 +816,9 @@ void parseCAN_hdx(void *arg)
 #endif
 
 #ifdef OH_CAN_HALDEX_MCP2515
-    struct can_frame frame = {};
-    if (can_mcp.readMessage(&frame) != MCP2515::ERROR_OK) {
+    if (!haldex_can_receive(rx_message_hdx)) {
       vTaskDelay(pdMS_TO_TICKS(1));
       continue;
-    }
-    rx_message_hdx.identifier = frame.can_id & CAN_EFF_MASK;
-    rx_message_hdx.extd = (frame.can_id & CAN_EFF_FLAG) ? 1 : 0;
-    rx_message_hdx.rtr = (frame.can_id & CAN_RTR_FLAG) ? 1 : 0;
-    rx_message_hdx.data_length_code = frame.can_dlc;
-    for (uint8_t i = 0; i < frame.can_dlc && i < 8; i++) {
-      rx_message_hdx.data[i] = frame.data[i];
     }
     do
     {
@@ -775,7 +832,7 @@ void parseCAN_hdx(void *arg)
     {
 #endif
       lastCANHaldexTick = millis();
-      ++lpHaldexFrameCount;
+      lpHaldexFrameCount = lpHaldexFrameCount + 1;
 
       // Analyzer mode: queue for GVRET/SLCAN and forward untouched, skipping control logic.
       if (analyzerMode || analyzerSerial)
@@ -958,7 +1015,7 @@ void parseCAN_hdx(void *arg)
 
       twai_transmit_v2(twai_bus_0, &rx_message_hdx, (10 / portTICK_PERIOD_MS));
 #ifdef OH_CAN_HALDEX_MCP2515
-    } while (0);
+    } while (haldex_can_receive(rx_message_hdx));
 #else
     } while (twai_receive_v2(twai_bus_1, &rx_message_hdx, 0) == ESP_OK);
 #endif

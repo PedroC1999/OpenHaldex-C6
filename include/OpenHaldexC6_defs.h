@@ -78,6 +78,9 @@
 
 // GPIO
 #ifdef OH_BOARD_T2CAN
+// The T-2CAN has no user-controllable CAN transceiver standby/slope pins.
+// Its MCP2515 interrupt output is on GPIO8, so it must not be used for the
+// WS2812 that is fitted to the OpenHaldex-C6 PCB.
 #define CAN0_RS -1
 #define CAN0_RX 6
 #define CAN0_TX 7
@@ -91,6 +94,7 @@
 #define MCP2515_MISO 13
 #define MCP2515_RST 9
 #define MCP2515_INT 8
+#define OH_HAS_RGB_LED 0
 #else
 #define CAN0_RS 2  // can_0 slope control
 #define CAN0_RX 23 // can_0 rx
@@ -98,9 +102,14 @@
 #define CAN1_RS 22 // can_1 slope control
 #define CAN1_RX 20 // can_1 tx
 #define CAN1_TX 21 // can_1 rx
+#define OH_HAS_RGB_LED 1
 #endif
 
+#if OH_HAS_RGB_LED
 #define gpio_led 8       // gpio for led
+#else
+#define gpio_led -1      // no WS2812 fitted on the LilyGo T-2CAN
+#endif
 #define gpio_mode 19     // gpio mode button internal
 #define gpio_mode_ext 18 // gpio mode button external
 

@@ -1,13 +1,6 @@
 #include <OpenHaldexC6_can.h>
 #include <OpenHaldexC6_UDS.h>
 
-#ifdef OH_CAN_HALDEX_MCP2515
-#include <SPI.h>
-#include <mcp2515.h>
-extern MCP2515 can_mcp;
-#endif
-
-
 using namespace OpenHaldexC6;
 
 // ---------------------------------------------------------------------------
@@ -669,15 +662,7 @@ bool UDS::receiveFrame(twai_message_t &frame, uint32_t timeoutMs)
     {
 #ifdef OH_CAN_HALDEX_MCP2515
         if (_canBus == twai_bus_1) {
-            struct can_frame mcp_frame = {};
-            if (can_mcp.readMessage(&mcp_frame) == MCP2515::ERROR_OK) {
-                frame.identifier = mcp_frame.can_id & CAN_EFF_MASK;
-                frame.extd = (mcp_frame.can_id & CAN_EFF_FLAG) ? 1 : 0;
-                frame.rtr = (mcp_frame.can_id & CAN_RTR_FLAG) ? 1 : 0;
-                frame.data_length_code = mcp_frame.can_dlc;
-                for (uint8_t i = 0; i < mcp_frame.can_dlc && i < 8; i++) {
-                    frame.data[i] = mcp_frame.data[i];
-                }
+            if (haldex_can_receive(frame)) {
                 return true;
             }
         } else {

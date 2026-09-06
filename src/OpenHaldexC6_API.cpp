@@ -672,19 +672,29 @@ static void tuneIncoming(AsyncWebServerRequest *request, const String &body)
 // setup webserver function
 void setupWebServer()
 {
-    if (!LittleFS.begin(false))
+    const bool littleFsMounted = LittleFS.begin(false);
+    if (!littleFsMounted)
     {
-        DEBUG("LittleFS mount failed!"); // littleFS didn't mount
-        // add a warning visual - flashing LED?
-        return;
+        // Do not leave the AP advertising a host with no listening HTTP port.
+        // This is common after flashing a new board without its LittleFS image.
+        // API routes registered by setupAPI() remain available for diagnosis.
+        DEBUG("LittleFS mount failed - upload the filesystem image");
+        webServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
+                     {
+                         request->send(503, "text/plain",
+                                       "LittleFS is not mounted. Upload the filesystem image (PlatformIO target: uploadfs).");
+                     });
     }
-    DEBUG("LittleFS mounted successfully");
+    else
+    {
+        DEBUG("LittleFS mounted successfully");
 
-    // when "/" is requested, send index.html page
-    webServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
-                 { request->send(LittleFS, "/index.html", "text/html"); });
+        // when "/" is requested, send index.html page
+        webServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
+                     { request->send(LittleFS, "/index.html", "text/html"); });
 
-    webServer.serveStatic("/", LittleFS, "/").setDefaultFile("index.html"); // dunno - same as above?
+        webServer.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
+    }
 
     webServer.begin(); // begin the webServer
     DEBUG("Web server started");

@@ -102,11 +102,15 @@ void loop()
     // just here to show a visual indication of the WiFi reboot
     for (int i = 0; i <= 3; i++)
     {
+#if OH_HAS_RGB_LED
       strip.setLedColorData(led_channel, ledBrightness, ledBrightness, ledBrightness);
       strip.show();
+#endif
       vTaskDelay(pdMS_TO_TICKS(50));
+#if OH_HAS_RGB_LED
       strip.setLedColorData(led_channel, 0, 0, 0);
       strip.show();
+#endif
       vTaskDelay(pdMS_TO_TICKS(50));
     }
 
