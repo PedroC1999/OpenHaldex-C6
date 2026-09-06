@@ -1,3 +1,4 @@
+#include <OpenHaldexC6_can.h>
 #include <OpenHaldexC6_StandaloneCAN.h>
 #include <OpenHaldexC6_Calculations.h>
 
@@ -22,7 +23,7 @@ static inline void standaloneTx(twai_message_t &f)
       }
     }
   }
-  twai_transmit_v2(twai_bus_1, &f, 0);
+  haldex_can_send(f, 0);
 }
 
 // Periodic frame tasks

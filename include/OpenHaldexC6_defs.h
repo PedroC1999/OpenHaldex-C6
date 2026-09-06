@@ -77,12 +77,28 @@
       ((byte) & 0x01 ? '1' : '0')
 
 // GPIO
+#ifdef OH_BOARD_T2CAN
+#define CAN0_RS -1
+#define CAN0_RX 6
+#define CAN0_TX 7
+#define CAN1_RS -1
+#define CAN1_RX -1
+#define CAN1_TX -1
+
+#define MCP2515_CS 10
+#define MCP2515_SCLK 12
+#define MCP2515_MOSI 11
+#define MCP2515_MISO 13
+#define MCP2515_RST 9
+#define MCP2515_INT 8
+#else
 #define CAN0_RS 2  // can_0 slope control
 #define CAN0_RX 23 // can_0 rx
 #define CAN0_TX 3  // can_0 tx
 #define CAN1_RS 22 // can_1 slope control
 #define CAN1_RX 20 // can_1 tx
 #define CAN1_TX 21 // can_1 rx
+#endif
 
 #define gpio_led 8       // gpio for led
 #define gpio_mode 19     // gpio mode button internal
