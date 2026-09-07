@@ -1,5 +1,5 @@
-#include <OpenHaldexC6_can.h>
 #include <OpenHaldexC6_UDS.h>
+#include <OpenHaldexC6_can.h> // haldex_can_send() - board-agnostic Haldex TX
 
 using namespace OpenHaldexC6;
 
@@ -573,15 +573,7 @@ bool UDS::sendSingleFrame(uint32_t canId, const uint8_t *payload, uint8_t length
     msg.data[0] = uint8_t(0x00 | length);
     memcpy(&msg.data[1], payload, length);
 
-#ifdef OH_CAN_HALDEX_MCP2515
-    if (_canBus == twai_bus_1) {
-        return haldex_can_send(msg, 10 / portTICK_PERIOD_MS);
-    } else {
-        return (twai_transmit_v2(_canBus, &msg, 10 / portTICK_PERIOD_MS) == ESP_OK);
-    }
-#else
     return (twai_transmit_v2(_canBus, &msg, 10 / portTICK_PERIOD_MS) == ESP_OK);
-#endif
 }
 
 bool UDS::sendFirstFrame(uint32_t canId, const uint8_t *payload, uint16_t length)
@@ -598,15 +590,7 @@ bool UDS::sendFirstFrame(uint32_t canId, const uint8_t *payload, uint16_t length
     msg.data[1] = uint8_t(length & 0xFF);
     memcpy(&msg.data[2], payload, 6);
 
-#ifdef OH_CAN_HALDEX_MCP2515
-    if (_canBus == twai_bus_1) {
-        return haldex_can_send(msg, 10 / portTICK_PERIOD_MS);
-    } else {
-        return (twai_transmit_v2(_canBus, &msg, 10 / portTICK_PERIOD_MS) == ESP_OK);
-    }
-#else
     return (twai_transmit_v2(_canBus, &msg, 10 / portTICK_PERIOD_MS) == ESP_OK);
-#endif
 }
 
 bool UDS::sendConsecutiveFrame(uint32_t canId, const uint8_t *payload, uint8_t sequenceCounter, uint8_t length)
@@ -622,15 +606,7 @@ bool UDS::sendConsecutiveFrame(uint32_t canId, const uint8_t *payload, uint8_t s
     msg.data[0] = uint8_t(0x20 | (sequenceCounter & 0x0F));
     memcpy(&msg.data[1], payload, length);
 
-#ifdef OH_CAN_HALDEX_MCP2515
-    if (_canBus == twai_bus_1) {
-        return haldex_can_send(msg, 10 / portTICK_PERIOD_MS);
-    } else {
-        return (twai_transmit_v2(_canBus, &msg, 10 / portTICK_PERIOD_MS) == ESP_OK);
-    }
-#else
     return (twai_transmit_v2(_canBus, &msg, 10 / portTICK_PERIOD_MS) == ESP_OK);
-#endif
 }
 
 bool UDS::sendFlowControl(uint32_t canId, uint8_t flowStatus, uint8_t blockSize, uint8_t stMin)
@@ -644,15 +620,7 @@ bool UDS::sendFlowControl(uint32_t canId, uint8_t flowStatus, uint8_t blockSize,
     msg.data[1] = blockSize;
     msg.data[2] = stMin;
 
-#ifdef OH_CAN_HALDEX_MCP2515
-    if (_canBus == twai_bus_1) {
-        return haldex_can_send(msg, 10 / portTICK_PERIOD_MS);
-    } else {
-        return (twai_transmit_v2(_canBus, &msg, 10 / portTICK_PERIOD_MS) == ESP_OK);
-    }
-#else
     return (twai_transmit_v2(_canBus, &msg, 10 / portTICK_PERIOD_MS) == ESP_OK);
-#endif
 }
 
 bool UDS::receiveFrame(twai_message_t &frame, uint32_t timeoutMs)
@@ -660,19 +628,8 @@ bool UDS::receiveFrame(twai_message_t &frame, uint32_t timeoutMs)
     uint32_t start = millis();
     while ((millis() - start) < timeoutMs)
     {
-#ifdef OH_CAN_HALDEX_MCP2515
-        if (_canBus == twai_bus_1) {
-            if (haldex_can_receive(frame)) {
-                return true;
-            }
-        } else {
-            if (twai_receive_v2(_canBus, &frame, 10 / portTICK_PERIOD_MS) == ESP_OK)
-                return true;
-        }
-#else
         if (twai_receive_v2(_canBus, &frame, 10 / portTICK_PERIOD_MS) == ESP_OK)
             return true;
-#endif
         delay(1);
     }
     return false;

@@ -37,6 +37,12 @@
 
 #include "InterruptButton.h" // for mode button (internal & external)
 
+#ifdef OH_CAN_HALDEX_MCP2515
+#include <SPI.h>      // for MCP2515 Haldex bus on LilyGo T-2CAN
+#include <mcp2515.h>  // autowp-mcp2515 driver (Haldex bus on T-2CAN)
+#include <mutex>      // guards shared SPI access to the MCP2515
+#endif
+
 // debug options
 #define enableDebug 0               // set to 1 to enable debug messages over Serial; set to 0 to disable
 #define detailedDebug 0             // set to 1 to enable more detailed debug messages (only recommended when debugging specific issues, as it can be very verbose)
@@ -48,9 +54,6 @@
 #define detailedDebugIO 0           // set to 1 to enable detailed IO debug messages (only recommended when debugging IO-related issues, as it can be very verbose)
 #define detailedDebugArray 0        // set to 1 to enable detailed debug messages for arrays (like throttle/speed/lock curves) - only recommended when debugging issues related to those, as it can be very verbose
 #define debugCANSleep 0             // set to 1 to skip the 5-min idle/60-s count and sleep after ~2 s with no clients
-#ifndef OH_CAN_DIAGNOSTICS
-#define OH_CAN_DIAGNOSTICS 0        // target-specific native CAN diagnostics
-#endif
 
 // refresh rates
 #define eepRefresh 2000           // EEPROM save in ms
@@ -59,7 +62,7 @@
 #define updateTriggersRefresh 500 // change IO refresh rate in ms
 
 // debugging macros
-#if enableDebug || detailedDebug || detailedDebugCAN || detailedDebugWiFi || detailedDebugEEP || detailedDebugIO || OH_CAN_DIAGNOSTICS
+#ifdef enableDebug
 #define DEBUG(x, ...) Serial.printf(x "\n", ##__VA_ARGS__)
 #define DEBUG_(x, ...) Serial.printf(x, ##__VA_ARGS__)
 #else
@@ -79,40 +82,52 @@
       ((byte) & 0x02 ? '1' : '0'), \
       ((byte) & 0x01 ? '1' : '0')
 
-// GPIO
+// GPIO - hardware pin map (selected at compile time per board)
 #ifdef OH_BOARD_T2CAN
-// The T-2CAN has no user-controllable CAN transceiver standby/slope pins.
-// Its MCP2515 interrupt output is on GPIO8, so it must not be used for the
-// WS2812 that is fitted to the OpenHaldex-C6 PCB.
-#define CAN0_RS -1
-#define CAN0_RX 6
-#define CAN0_TX 7
-#define CAN1_RS -1
-#define CAN1_RX -1
-#define CAN1_TX -1
+// -------------------------------------------------------------------------
+// LilyGo T-2CAN (ESP32-S3)
+// Chassis bus  : internal TWAI controller 0 on the CAN1 pins below.
+// Haldex bus   : MCP2515 over SPI (see MCP2515_* pins) - no second TWAI.
+// The board has no CAN transceiver slope-control (RS) pins, and no onboard
+// LED/buttons/brake IO; those signals are mapped to spare GPIOs so they can
+// optionally be wired. Inputs use INPUT_PULLDOWN so a floating (unconnected)
+// pin reads inactive - see setupIO()/setupButtons().
+// -------------------------------------------------------------------------
+#define CAN0_RS -1 // no transceiver slope-control pin
+#define CAN0_RX -1 // unused (chassis bus uses the CAN1 pins below)
+#define CAN0_TX -1 // unused
+#define CAN1_RS -1 // no transceiver slope-control pin
+#define CAN1_RX 6  // chassis can rx (internal TWAI)
+#define CAN1_TX 7  // chassis can tx (internal TWAI)
 
-#define MCP2515_CS 10
-#define MCP2515_SCLK 12
-#define MCP2515_MOSI 11
-#define MCP2515_MISO 13
-#define MCP2515_RST 9
-#define MCP2515_INT 8
-#define OH_HAS_RGB_LED 0
+// MCP2515 (Haldex bus) SPI pins
+#define MCP2515_CS 10   // SPI chip select
+#define MCP2515_SCLK 12 // SPI clock
+#define MCP2515_MOSI 11 // SPI MOSI
+#define MCP2515_MISO 13 // SPI MISO
+#define MCP2515_RST 9   // MCP2515 reset
+#define MCP2515_INT 8   // MCP2515 interrupt (unused - driver is polled)
+
+#define gpio_led 48       // gpio for led (optional - safe if unconnected)
+#define gpio_mode 19      // gpio mode button internal (optional, INPUT_PULLDOWN)
+#define gpio_mode_ext 18  // gpio mode button external (optional, INPUT_PULLDOWN)
+
+#define gpio_hb_in 14     // gpio for handbrake signal in  (optional, INPUT_PULLDOWN)
+#define gpio_hb_out 15    // gpio for handbrake signal out (optional)
+#define gpio_brake_in 4   // gpio for brake signal in  (optional, INPUT_PULLDOWN; GPIO0 avoided - strapping pin)
+#define gpio_brake_out 5  // gpio for brake signal out (optional)
 #else
+// -------------------------------------------------------------------------
+// OpenHaldex-C6 custom PCB (ESP32-C6) - original pin map
+// -------------------------------------------------------------------------
 #define CAN0_RS 2  // can_0 slope control
 #define CAN0_RX 23 // can_0 rx
 #define CAN0_TX 3  // can_0 tx
 #define CAN1_RS 22 // can_1 slope control
 #define CAN1_RX 20 // can_1 tx
 #define CAN1_TX 21 // can_1 rx
-#define OH_HAS_RGB_LED 1
-#endif
 
-#if OH_HAS_RGB_LED
 #define gpio_led 8       // gpio for led
-#else
-#define gpio_led -1      // no WS2812 fitted on the LilyGo T-2CAN
-#endif
 #define gpio_mode 19     // gpio mode button internal
 #define gpio_mode_ext 18 // gpio mode button external
 
@@ -120,6 +135,18 @@
 #define gpio_hb_out 15   // gpio for handbrake signal out
 #define gpio_brake_in 0  // gpio for brake signal in
 #define gpio_brake_out 1 // gpio for brake signal out
+#endif
+
+// Board identity + capability flags (used by the API/web UI and guards)
+#ifdef OH_BOARD_T2CAN
+#define BOARD_NAME "OpenHaldex-S3"        // display name / factory AP SSID
+#define BOARD_ID "openhaldex-s3"          // stable id reported to the web UI
+#define BOARD_CAN_SLEEP_SUPPORTED 0       // no transceiver RS pins -> no CAN sleep
+#else
+#define BOARD_NAME "OpenHaldex-C6"
+#define BOARD_ID "openhaldex-c6"
+#define BOARD_CAN_SLEEP_SUPPORTED 1
+#endif
 
 // led settings
 #define led_channel 0              // channel for led
@@ -127,7 +154,7 @@
 extern uint8_t ledBrightness;      // runtime LED brightness (0–255, persisted)
 
 // wifi settings
-#define wifiHostNameDefault "OpenHaldex-C6" // factory default AP SSID
+#define wifiHostNameDefault BOARD_NAME // factory default AP SSID (board-specific)
 #define wifiHostName wifiSsid              // legacy alias - all call sites now use runtime SSID
 extern char wifiSsid[33];                  // runtime AP SSID (max 32 chars + NUL)
 

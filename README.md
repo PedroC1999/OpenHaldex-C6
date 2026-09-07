@@ -483,6 +483,55 @@ This is the recommended method for most users.
 
 ---
 
+## LilyGo T-2CAN (ESP32-S3) build
+
+The same firmware also runs on the off-the-shelf **LilyGo T-2CAN** board (ESP32-S3),
+selected at compile time. This lets T-2CAN users share the OpenHaldex-C6 firmware and
+features. The build is branded **OpenHaldex-S3** (default Wi‑Fi AP SSID and web UI title).
+
+### Hardware differences vs. the OpenHaldex-C6 PCB
+
+| Function | OpenHaldex-C6 (ESP32-C6) | LilyGo T-2CAN (ESP32-S3) |
+|----------|--------------------------|---------------------------|
+| Chassis CAN | internal TWAI, TX GPIO3 / RX GPIO23 | internal TWAI, TX GPIO7 / RX GPIO6 |
+| Haldex CAN | internal TWAI, TX GPIO21 / RX GPIO20 | **MCP2515** over SPI: CS GPIO10, SCK GPIO12, MOSI GPIO11, MISO GPIO13, RST GPIO9 (INT GPIO8, unused) |
+| CAN transceiver standby / CAN sleep | supported (RS pins) | **not supported** (no RS pins) — hidden in the UI |
+| Status LED (WS2812) | GPIO8 | GPIO48 *(optional — not fitted by default)* |
+| Mode button (internal / external) | GPIO19 / GPIO18 | GPIO19 / GPIO18 *(optional; disabled by default)* |
+| Handbrake in / out | GPIO14 / GPIO15 | GPIO14 / GPIO15 *(optional)* |
+| Brake in / out | GPIO0 / GPIO1 | GPIO4 / GPIO5 *(optional)* |
+
+The LED, buttons and brake/handbrake IO are broken out to spare GPIOs so they can
+optionally be wired. All inputs use internal pulldowns and the mode buttons default
+**disabled**, so an unconnected T-2CAN is completely safe out of the box. Enable the
+buttons in the web UI once a button (and pulldown) is wired.
+
+### Building
+
+```
+# OpenHaldex-C6 custom PCB (default)
+pio run -e esp32c6
+
+# LilyGo T-2CAN (ESP32-S3)
+pio run -e lilygo-t2can-s3
+```
+
+The T-2CAN environment defines `OH_BOARD_T2CAN` and `OH_CAN_HALDEX_MCP2515`; the C6
+build is completely unaffected.
+
+### Flashing / distribution (ESP32-S3)
+
+C6 firmware binaries are **not** interchangeable with the S3 (different chip family;
+ESP-IDF's OTA/flasher rejects a mismatched image, so there is no brick risk — you just
+need the correct build). Package the four binaries produced by
+`pio run -e lilygo-t2can-s3` (`bootloader.bin`, `partitions.bin`, `firmware.bin`,
+`littlefs.bin`) alongside [`manifest_t2can_s3.json`](manifest_t2can_s3.json), which
+declares `chipFamily: ESP32-S3` and the 16 MB LittleFS offset, for the ESP Web Tools
+installer.
+
+
+---
+
 ## CAN Sniffing (SavvyCAN / GVRET)
 
 Adding more functionality couldn't be easier - you just need to know the feature you want and grab some CAN data to help implement it.  Using the SavvyCAN interface, you can listen to the CAN messages to see what the car is talking about...

@@ -381,6 +381,7 @@
 
             <section class="card">
                 <h2>Output Options</h2>
+                <p class="hint" id="t2canOutputNote" style="display:none">On this board the brake/handbrake signals are not wired by default — connect them to the mapped GPIOs (see the README pin map) to use these options.</p>
                 <div class="toggle-group">
                     <label class="toggle">
                         <input type="checkbox" id="followBrake">
@@ -407,6 +408,7 @@
 
             <section class="card">
                 <h2>Controller Options</h2>
+                <p class="hint" id="t2canControllerNote" style="display:none">On this board the status LED and mode buttons are optional — they are not fitted by default. Wire them to the mapped GPIOs (see the README pin map) and enable the buttons below to use them.</p>
                 <div class="toggle-group">
                     <label class="toggle">
                         <input type="checkbox" id="disableController">
@@ -455,6 +457,10 @@
                         <span class="toggle-slider"></span>
                         <span class="toggle-label">Disable External Button</span>
                     </label>
+                    <!-- CAN sleep is ESP32-C6 (transceiver RS pin) only; the JS
+                         hides this whole block on boards that report
+                         canSleepSupported == false (e.g. LilyGo T-2CAN). -->
+                    <div id="canSleepSection">
                     <label class="toggle">
                         <input type="checkbox" id="canSleepEnabled">
                         <span class="toggle-slider"></span>
@@ -483,6 +489,7 @@
                             <span>Haldex: <span id="lpHaldexFrameRate">--</span> fps</span>
                         </div>
                     </div>
+                    </div><!-- /canSleepSection -->
                     <div class="brightness-row">
                         <span class="toggle-label">LED Brightness</span>
                         <div class="brightness-controls">

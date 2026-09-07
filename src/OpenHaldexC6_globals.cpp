@@ -129,8 +129,16 @@ bool paddleTipBoth   = false;
 bool extBtnForceMode = false;
 bool extButtonForceModeFlag = false;
 
+#ifdef OH_BOARD_T2CAN
+// T-2CAN has no onboard buttons; default them OFF so an unconnected/floating
+// mode pin can never spuriously cycle modes or trigger the long-press WiFi
+// reset. The user wires a button and enables it from the web UI.
+bool disableOnboardButton = true;
+bool disableExternalButton = true;
+#else
 bool disableOnboardButton = false;
 bool disableExternalButton = false;
+#endif
 
 bool fixHunting = false; // when true, Motor_11 uses BPK packing instead of V3
 
@@ -401,14 +409,6 @@ volatile bool haldexLearnActive = false;
 volatile bool haldexLearnCancel = false;
 volatile uint8_t haldexLearnStep = 0;   // 0-100 = current step, 101 = complete
 volatile uint8_t haldexLearnCF = 0;     // current correction factor override during learn
-// A learn may temporarily enable the controller and select 50:50, exactly as
-// the known-good S3 implementation does.  Keep enough state to restore the
-// user's configuration whether the sweep completes, is cancelled, or fails
-// to create its task.
-bool haldexLearnRestorePending = false;
-bool haldexLearnRestoreDisableController = false;
-openhaldex_mode_t haldexLearnRestoreMode = MODE_STOCK;
-uint8_t haldexLearnRestoreLastMode = MODE_STOCK;
 uint8_t tempCounter1;
 uint16_t tempCounter2;
 

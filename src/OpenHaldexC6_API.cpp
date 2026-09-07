@@ -278,6 +278,13 @@ static void settingsOutgoing(AsyncWebServerRequest *request)
     data["lockReleaseRatePerSec"] = lockReleaseRatePerSec;
     data["FW_VERSION"] = FW_VERSION;
 
+    // Board identity + capabilities (drives board-aware web UI). "board" is a
+    // stable id; "boardName" is the display/SSID name; "canSleepSupported" lets
+    // the UI hide the CAN-sleep controls on hardware that lacks it (T-2CAN).
+    data["board"] = BOARD_ID;
+    data["boardName"] = BOARD_NAME;
+    data["canSleepSupported"] = (bool)BOARD_CAN_SLEEP_SUPPORTED;
+
     // bools
     data["disableController"] = disableController;
     data["isStandalone"] = isStandalone;
@@ -516,6 +523,7 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
         fixHunting = data["fixHunting"];
     }
 
+#if BOARD_CAN_SLEEP_SUPPORTED
     if (data["canSleepEnabled"].is<bool>())
     {
         canSleepEnabled = data["canSleepEnabled"];
@@ -535,6 +543,7 @@ static void settingsIncoming(AsyncWebServerRequest *request, const String &body)
     {
         lpWakeThresholdFps = constrain((uint16_t)data["lpWakeThresholdFps"], 0, 2000);
     }
+#endif // BOARD_CAN_SLEEP_SUPPORTED - CAN sleep unavailable on T-2CAN, ignore writes
     if (data["followBrake"].is<bool>())
     {
         followBrake = data["followBrake"];
@@ -672,29 +681,25 @@ static void tuneIncoming(AsyncWebServerRequest *request, const String &body)
 // setup webserver function
 void setupWebServer()
 {
-    const bool littleFsMounted = LittleFS.begin(false);
-    if (!littleFsMounted)
+    // Match the filesystem partition name in each board's partition table.
+#ifdef OH_BOARD_T2CAN
+    const char *filesystemPartition = "littlefs";
+#else
+    const char *filesystemPartition = "spiffs";
+#endif
+    if (!LittleFS.begin(false, "/littlefs", 10, filesystemPartition))
     {
-        // Do not leave the AP advertising a host with no listening HTTP port.
-        // This is common after flashing a new board without its LittleFS image.
-        // API routes registered by setupAPI() remain available for diagnosis.
-        DEBUG("LittleFS mount failed - upload the filesystem image");
-        webServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
-                     {
-                         request->send(503, "text/plain",
-                                       "LittleFS is not mounted. Upload the filesystem image (PlatformIO target: uploadfs).");
-                     });
+        DEBUG("LittleFS mount failed!"); // littleFS didn't mount
+        // add a warning visual - flashing LED?
+        return;
     }
-    else
-    {
-        DEBUG("LittleFS mounted successfully");
+    DEBUG("LittleFS mounted successfully");
 
-        // when "/" is requested, send index.html page
-        webServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
-                     { request->send(LittleFS, "/index.html", "text/html"); });
+    // when "/" is requested, send index.html page
+    webServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
+                 { request->send(LittleFS, "/index.html", "text/html"); });
 
-        webServer.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
-    }
+    webServer.serveStatic("/", LittleFS, "/").setDefaultFile("index.html"); // dunno - same as above?
 
     webServer.begin(); // begin the webServer
     DEBUG("Web server started");
@@ -809,21 +814,17 @@ void setupAPI()
     // POST /api/learn/start - begin the learn sweep
     webServer.on("/api/learn/start", HTTP_POST, [](AsyncWebServerRequest *request)
                  {
-                     if (!hasCANChassis || !hasCANHaldex)
+                     if (!hasCANHaldex)
                      {
                          JsonDocument resp;
                          resp["ok"]    = false;
-                         resp["error"] = "Both chassis and Haldex CAN data are required";
+                         resp["error"] = "No Haldex CAN data available";
                          sendJSON(request, 200, resp);
                          return;
                      }
-                     const bool started = startHaldexLearn();
+                     startHaldexLearn();
                      JsonDocument resp;
-                     resp["ok"] = started;
-                     if (!started)
-                     {
-                         resp["error"] = "Failed to start learn task";
-                     }
+                     resp["ok"] = true;
                      sendJSON(request, 200, resp); });
 
     // POST /api/learn/cancel - abort an in-progress learn sweep

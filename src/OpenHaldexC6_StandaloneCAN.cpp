@@ -1,6 +1,6 @@
-#include <OpenHaldexC6_can.h>
 #include <OpenHaldexC6_StandaloneCAN.h>
 #include <OpenHaldexC6_Calculations.h>
+#include <OpenHaldexC6_can.h> // haldex_can_send() - board-agnostic Haldex TX
 
 // Standalone frames honour the same frame-edit mask as the passthrough path: a
 // block turned OFF in the UI is simply not generated (mirrors the passthrough

@@ -3,53 +3,22 @@
 #include <OpenHaldexC6_Analyzer.h>
 #include <OpenHaldexC6_UDS.h>
 
-
 #ifdef OH_CAN_HALDEX_MCP2515
-#include <SPI.h>
-#include <mcp2515.h>
-extern MCP2515 can_mcp;
+// LilyGo T-2CAN: the Haldex bus is an MCP2515 on the SPI pins defined in
+// OpenHaldexC6_defs.h. A mutex guards the shared SPI transactions because the
+// controller is accessed from several tasks (parseCAN_chs/hdx, frame
+// generators, UDS/TP2.0, analyzer). 10 MHz SPI clock matches the working
+// OpenHaldex-S3 configuration.
+static MCP2515 s_mcp2515(MCP2515_CS, 10000000, &SPI);
+static std::mutex s_mcp_mutex;
 #endif
 
-
-#ifdef OH_CAN_HALDEX_MCP2515
-// Match the known-working OpenHaldex-S3 T-2CAN configuration explicitly:
-// 10 MHz on the Arduino global SPI bus.
-MCP2515 can_mcp(MCP2515_CS, 10000000, &SPI);
-static bool mcp2515Ready = false;
-// The chassis parser forwards frames while the Haldex parser (and UDS) reads
-// from this SPI-connected controller.  MCP2515 library calls are multi-byte
-// SPI transactions, so they must not overlap between FreeRTOS tasks.
-static SemaphoreHandle_t mcp2515Mutex = nullptr;
-
-bool haldex_can_receive(twai_message_t &message)
+// Send a frame on the Haldex bus. On the C6 this is TWAI controller 1; on the
+// T-2CAN it is the MCP2515. Returns true on success.
+bool haldex_can_send(const twai_message_t &msg, TickType_t timeout_ticks)
 {
-  if (!mcp2515Ready)
-    return false;
-
-  struct can_frame frame = {};
-  if (mcp2515Mutex == nullptr || xSemaphoreTake(mcp2515Mutex, 0) != pdTRUE)
-    return false;
-  const MCP2515::ERROR result = can_mcp.readMessage(&frame);
-  xSemaphoreGive(mcp2515Mutex);
-  if (result != MCP2515::ERROR_OK)
-    return false;
-
-  message.identifier = frame.can_id & CAN_EFF_MASK;
-  message.extd = (frame.can_id & CAN_EFF_FLAG) ? 1 : 0;
-  message.rtr = (frame.can_id & CAN_RTR_FLAG) ? 1 : 0;
-  message.data_length_code = frame.can_dlc;
-  for (uint8_t i = 0; i < frame.can_dlc && i < 8; i++)
-    message.data[i] = frame.data[i];
-  return true;
-}
-#endif
-
-bool haldex_can_send(const twai_message_t& msg, TickType_t timeout_ticks) {
 #ifdef OH_CAN_HALDEX_MCP2515
-  (void)timeout_ticks;
-  if (!mcp2515Ready)
-    return false;
-
+  (void)timeout_ticks; // MCP2515 sendMessage picks a free TX buffer immediately
   struct can_frame frame = {};
   frame.can_id = msg.identifier & 0x1FFFFFFF;
   if (msg.extd)
@@ -57,32 +26,41 @@ bool haldex_can_send(const twai_message_t& msg, TickType_t timeout_ticks) {
   if (msg.rtr)
     frame.can_id |= CAN_RTR_FLAG;
   frame.can_dlc = msg.data_length_code;
-  for (uint8_t i = 0; i < frame.can_dlc && i < 8; i++) {
+  for (uint8_t i = 0; i < frame.can_dlc && i < 8; i++)
     frame.data[i] = msg.data[i];
-  }
-  // Match OpenHaldex-S3: forwarding must never block the high-priority
-  // chassis receive task. The MCP2515 has only three TX buffers; if they are
-  // occupied, discard this frame rather than delaying all subsequent chassis
-  // traffic for up to the caller's timeout.
-  if (mcp2515Mutex == nullptr || xSemaphoreTake(mcp2515Mutex, 0) != pdTRUE)
-    return false;
-  const MCP2515::ERROR result = can_mcp.sendMessage(&frame);
-  xSemaphoreGive(mcp2515Mutex);
-  return result == MCP2515::ERROR_OK;
+  std::lock_guard<std::mutex> lock(s_mcp_mutex);
+  return s_mcp2515.sendMessage(&frame) == MCP2515::ERROR_OK;
 #else
-  return (twai_transmit_v2(twai_bus_1, &msg, timeout_ticks) == ESP_OK);
+  return twai_transmit_v2(twai_bus_1, &msg, timeout_ticks) == ESP_OK;
 #endif
 }
 
-#ifndef OH_CAN_HALDEX_MCP2515
-bool haldex_can_receive(twai_message_t &message)
+// Receive a frame from the Haldex bus. On the C6 this blocks on TWAI for up to
+// timeout_ticks; on the T-2CAN the MCP2515 is polled (non-blocking) so callers
+// pass a 0 timeout and yield between empty polls.
+bool haldex_can_receive(twai_message_t &msg, TickType_t timeout_ticks)
 {
-  return twai_receive_v2(twai_bus_1, &message, 0) == ESP_OK;
-}
+#ifdef OH_CAN_HALDEX_MCP2515
+  (void)timeout_ticks; // MCP2515 read is non-blocking
+  struct can_frame frame = {};
+  {
+    std::lock_guard<std::mutex> lock(s_mcp_mutex);
+    if (s_mcp2515.readMessage(&frame) != MCP2515::ERROR_OK)
+      return false;
+  }
+  msg.identifier = frame.can_id & CAN_EFF_MASK;
+  msg.extd = (frame.can_id & CAN_EFF_FLAG) ? 1 : 0;
+  msg.rtr = (frame.can_id & CAN_RTR_FLAG) ? 1 : 0;
+  msg.data_length_code = frame.can_dlc;
+  for (uint8_t i = 0; i < frame.can_dlc && i < 8; i++)
+    msg.data[i] = frame.data[i];
+  return true;
+#else
+  return twai_receive_v2(twai_bus_1, &msg, timeout_ticks) == ESP_OK;
 #endif
+}
 
 void broadcastOpenHaldex(void *arg)
-
 {
   while (1)
   {
@@ -118,14 +96,15 @@ void broadcastOpenHaldex(void *arg)
   }
 }
 
-// Helper for analyzer pass-through: forward a frame exactly as received.
-static void transmitFrameCopy(twai_handle_t bus, const twai_message_t &src, twai_message_t &scratch)
+// Helper for analyzer pass-through: forward a chassis frame onto the Haldex bus
+// exactly as received (board-agnostic via haldex_can_send).
+static void transmitHaldexCopy(const twai_message_t &src, twai_message_t &scratch)
 {
   scratch = src;
   scratch.extd = src.extd;
   scratch.rtr = src.rtr;
   scratch.data_length_code = src.data_length_code;
-  twai_transmit_v2(bus, &scratch, (10 / portTICK_PERIOD_MS));
+  haldex_can_send(scratch, (10 / portTICK_PERIOD_MS));
 }
 
 // Brake/handbrake override applied to chassis frames before forwarding to the
@@ -183,55 +162,14 @@ static void applyBrakeHandbrakeCANOverride(twai_message_t &m)
   }
 }
 
-void setupCAN()
-{
-  twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(gpio_num_t(CAN0_TX), gpio_num_t(CAN0_RX), TWAI_MODE_NO_ACK); // TWAI_MODE_NORMAL, TWAI_MODE_NO_ACK or TWAI_MODE_LISTEN_ONLY
-  twai_timing_config_t t_config = TWAI_TIMING_CONFIG_500KBITS();                                                            // default CAN speed
-  twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();                                                          // accept all messages
-
-  // g_config.intr_flags = ESP_INTR_FLAG_LOWMED;  //Optional - move canbus irq to free up the default level 1 IRQ it will take up.  Todo
-  g_config.tx_queue_len = 1024; //<TWAI_GENERAL_CONFIG_DEFAULT default is 5, use this to increase if needed
-  g_config.rx_queue_len = 2048; //<TWAI_GENERAL_CONFIG_DEFAULT default is 5, use this to increase if needed // 4096
-  // g_config.intr_flags = ESP_INTR_FLAG_IRAM;
-
-  // The T-2CAN reference firmware keeps its native TWAI controller powered.
-  // Do the same here: losing the peripheral during automatic light sleep can
-  // leave the chassis receiver silent even though the MCP2515 remains active.
-  #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 4, 0) && !defined(OH_BOARD_T2CAN)
-  g_config.general_flags.sleep_allow_pd = 1;
-#endif
-
-  // setup CAN Controller (0) - Chassis
-  g_config.controller_id = 0;
-  // Explicit as in OpenHaldex-S3, even though the default macro also carries
-  // these pins. This avoids relying on a framework-specific macro layout.
-  g_config.tx_io = gpio_num_t(CAN0_TX);
-  g_config.rx_io = gpio_num_t(CAN0_RX);
-#if OH_CAN_DIAGNOSTICS
-  DEBUG("[CAN-CHS] init ctl=0 tx=%d rx=%d mode=NO_ACK bitrate=500k txq=%d rxq=%d",
-        CAN0_TX, CAN0_RX, g_config.tx_queue_len, g_config.rx_queue_len);
-#endif
-  ESP_ERROR_CHECK(twai_driver_install_v2(&g_config, &t_config, &f_config, &twai_bus_0));
-  DEBUG("CAN - Driver 0 Installed");
-  ESP_ERROR_CHECK(twai_start_v2(twai_bus_0));
-  DEBUG("CAN - Driver 0 Started");
-#if OH_CAN_DIAGNOSTICS
-  twai_status_info_t initialChassisStatus = {};
-  if (twai_get_status_info_v2(twai_bus_0, &initialChassisStatus) == ESP_OK)
-  {
-    DEBUG("[CAN-CHS] started state=%d txerr=%u rxerr=%u", (int)initialChassisStatus.state,
-          initialChassisStatus.tx_error_counter, initialChassisStatus.rx_error_counter);
-  }
-#endif
-
-  // setup CAN Controller (1) - Haldex
 #ifdef OH_CAN_HALDEX_MCP2515
-  mcp2515Mutex = xSemaphoreCreateMutex();
-  if (mcp2515Mutex == nullptr) {
-      mcp2515Ready = false;
-      DEBUG("CAN haldex (MCP2515) mutex creation failed");
-      return;
-  }
+// Bring up the Haldex bus on the MCP2515 (LilyGo T-2CAN). Replicates the
+// working OpenHaldex-S3 sequence exactly: hardware reset pulse, SPI.begin with
+// the T-2CAN pin order, then reset/bitrate/normal-mode. The 500 kbit/s bitrate
+// uses the library default 16 MHz crystal (matching the T-2CAN hardware).
+static bool setupHaldexMcp2515()
+{
+  std::lock_guard<std::mutex> lock(s_mcp_mutex);
   pinMode(MCP2515_RST, OUTPUT);
   digitalWrite(MCP2515_RST, HIGH);
   delay(10);
@@ -239,21 +177,75 @@ void setupCAN()
   delay(10);
   digitalWrite(MCP2515_RST, HIGH);
   delay(10);
+
   SPI.begin(MCP2515_SCLK, MCP2515_MISO, MCP2515_MOSI, MCP2515_CS);
-  xSemaphoreTake(mcp2515Mutex, portMAX_DELAY);
-  const bool mcpInitialized =
-      can_mcp.reset() == MCP2515::ERROR_OK &&
-      can_mcp.setBitrate(CAN_500KBPS) == MCP2515::ERROR_OK &&
-      can_mcp.setNormalMode() == MCP2515::ERROR_OK;
-  xSemaphoreGive(mcp2515Mutex);
-  if (mcpInitialized) {
-      mcp2515Ready = true;
-      DEBUG("CAN haldex (MCP2515) started");
-  } else {
-      mcp2515Ready = false;
-      DEBUG("CAN haldex (MCP2515) init failed");
+
+  if (s_mcp2515.reset() != MCP2515::ERROR_OK)
+  {
+    DEBUG("CAN - Haldex (MCP2515) reset failed");
+    return false;
+  }
+  if (s_mcp2515.setBitrate(CAN_500KBPS) != MCP2515::ERROR_OK)
+  {
+    DEBUG("CAN - Haldex (MCP2515) bitrate set failed");
+    return false;
+  }
+  if (s_mcp2515.setNormalMode() != MCP2515::ERROR_OK)
+  {
+    DEBUG("CAN - Haldex (MCP2515) normal mode failed");
+    return false;
+  }
+  DEBUG("CAN - Haldex (MCP2515) started");
+  return true;
+}
+#endif
+
+void setupCAN()
+{
+  // Chassis bus pins. On the C6 the chassis is TWAI controller 0 on the CAN0
+  // pins; on the T-2CAN there is no CAN0 transceiver, so the chassis lives on
+  // the CAN1 pins (still installed as controller 0 / twai_bus_0).
+#ifdef OH_BOARD_T2CAN
+  const gpio_num_t chassis_tx = gpio_num_t(CAN1_TX);
+  const gpio_num_t chassis_rx = gpio_num_t(CAN1_RX);
+#else
+  const gpio_num_t chassis_tx = gpio_num_t(CAN0_TX);
+  const gpio_num_t chassis_rx = gpio_num_t(CAN0_RX);
+#endif
+
+  twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(chassis_tx, chassis_rx, TWAI_MODE_NO_ACK); // TWAI_MODE_NORMAL, TWAI_MODE_NO_ACK or TWAI_MODE_LISTEN_ONLY
+  twai_timing_config_t t_config = TWAI_TIMING_CONFIG_500KBITS();                                          // default CAN speed
+  twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();                                        // accept all messages
+
+  // g_config.intr_flags = ESP_INTR_FLAG_LOWMED;  //Optional - move canbus irq to free up the default level 1 IRQ it will take up.  Todo
+  g_config.tx_queue_len = 1024; //<TWAI_GENERAL_CONFIG_DEFAULT default is 5, use this to increase if needed
+  g_config.rx_queue_len = 2048; //<TWAI_GENERAL_CONFIG_DEFAULT default is 5, use this to increase if needed // 4096
+  // g_config.intr_flags = ESP_INTR_FLAG_IRAM;
+
+#if BOARD_CAN_SLEEP_SUPPORTED
+  // Allow the TWAI power domain to be powered down during light sleep; the
+  // driver auto-saves/restores its registers + RX queue across sleep cycles.
+  // Sleep entry itself is gated at runtime by `canSleepEnabled`.
+  // (ESP32-C6 only - the T-2CAN/ESP32-S3 build has no CAN sleep.)
+  g_config.general_flags.sleep_allow_pd = 1;
+#endif
+
+  // setup CAN Controller (0) - Chassis
+  g_config.controller_id = 0;
+  ESP_ERROR_CHECK(twai_driver_install_v2(&g_config, &t_config, &f_config, &twai_bus_0));
+  DEBUG("CAN - Driver 0 Installed");
+  ESP_ERROR_CHECK(twai_start_v2(twai_bus_0));
+  DEBUG("CAN - Driver 0 Started");
+
+#ifdef OH_CAN_HALDEX_MCP2515
+  // Haldex bus - MCP2515 over SPI (T-2CAN). twai_bus_1 stays null.
+  if (!setupHaldexMcp2515())
+  {
+    DEBUG("CAN - Haldex (MCP2515) init failed");
+    return;
   }
 #else
+  // setup CAN Controller (1) - Haldex (internal TWAI on the C6)
   g_config.controller_id = 1;
   g_config.tx_io = gpio_num_t(CAN1_TX);
   g_config.rx_io = gpio_num_t(CAN1_RX);
@@ -269,12 +261,11 @@ void setupCAN()
                               TWAI_ALERT_BUS_ERROR | TWAI_ALERT_RX_QUEUE_FULL |
                               TWAI_ALERT_TX_FAILED | TWAI_ALERT_BUS_OFF |
                               TWAI_ALERT_BUS_RECOVERED | TWAI_ALERT_RX_FIFO_OVERRUN;
-  // Apply to both controllers explicitly (v2 driver -> per-handle alerts).
-#ifdef OH_CAN_HALDEX_MCP2515
+  // Apply per-handle (v2 driver). Only bus 0 is a TWAI controller on the
+  // T-2CAN; the Haldex MCP2515 manages its own error state.
   bool alertsOk = (twai_reconfigure_alerts_v2(twai_bus_0, alerts_to_enable, NULL) == ESP_OK);
-#else
-  bool alertsOk = (twai_reconfigure_alerts_v2(twai_bus_0, alerts_to_enable, NULL) == ESP_OK) &&
-                  (twai_reconfigure_alerts_v2(twai_bus_1, alerts_to_enable, NULL) == ESP_OK);
+#ifndef OH_CAN_HALDEX_MCP2515
+  alertsOk = alertsOk && (twai_reconfigure_alerts_v2(twai_bus_1, alerts_to_enable, NULL) == ESP_OK);
 #endif
   if (alertsOk)
   {
@@ -305,36 +296,22 @@ void setupCAN()
 void canBusRecovery()
 {
   static bool recovering[2] = {false, false}; // two TWAI controllers, track which ones we put into recovery
-#ifdef OH_CAN_HALDEX_MCP2515
-  twai_handle_t buses[1] = {twai_bus_0};
-  int num_buses = 1;
-#else
   twai_handle_t buses[2] = {twai_bus_0, twai_bus_1};
-  int num_buses = 2;
-#endif
   bool anyFault = false;
-#if OH_CAN_DIAGNOSTICS
-  static uint32_t lastChassisReportMs = 0;
-#endif
 
-  for (int i = 0; i < num_buses; ++i)
+  for (int i = 0; i < 2; ++i)
   {
     twai_handle_t bus = buses[i];
+
+    // On the T-2CAN the Haldex bus is an MCP2515 (twai_bus_1 stays null); it
+    // manages its own error state, so skip any null TWAI handle here.
+    if (bus == nullptr)
+      continue;
 
     // Non-blocking alert read - latch transient error conditions as a fault.
     uint32_t alerts = 0;
     if (twai_read_alerts_v2(bus, &alerts, 0) == ESP_OK)
     {
-#if OH_CAN_DIAGNOSTICS
-      if (alerts != 0)
-      {
-        DEBUG("[CAN-CHS] alerts=0x%08lX buserr=%d errpass=%d txfail=%d busoff=%d rxqfull=%d overrun=%d",
-              (unsigned long)alerts,
-              (alerts & TWAI_ALERT_BUS_ERROR) != 0, (alerts & TWAI_ALERT_ERR_PASS) != 0,
-              (alerts & TWAI_ALERT_TX_FAILED) != 0, (alerts & TWAI_ALERT_BUS_OFF) != 0,
-              (alerts & TWAI_ALERT_RX_QUEUE_FULL) != 0, (alerts & TWAI_ALERT_RX_FIFO_OVERRUN) != 0);
-      }
-#endif
       if (alerts & (TWAI_ALERT_BUS_ERROR | TWAI_ALERT_ERR_PASS |
                     TWAI_ALERT_TX_FAILED | TWAI_ALERT_RX_QUEUE_FULL |
                     TWAI_ALERT_RX_FIFO_OVERRUN))
@@ -346,17 +323,6 @@ void canBusRecovery()
     twai_status_info_t status;
     if (twai_get_status_info_v2(bus, &status) != ESP_OK)
       continue;
-
-#if OH_CAN_DIAGNOSTICS
-    if ((millis() - lastChassisReportMs) >= 1000)
-    {
-      lastChassisReportMs = millis();
-      const long rxAgeMs = lastCANChassisTick > 0 ? (long)(millis() - lastCANChassisTick) : -1;
-      DEBUG("[CAN-CHS] state=%d rxq=%lu missed=%lu overrun=%lu txerr=%u rxerr=%u buserr=%lu rx-age=%ldms",
-            (int)status.state, status.msgs_to_rx, status.rx_missed_count, status.rx_overrun_count,
-            status.tx_error_counter, status.rx_error_counter, status.bus_error_count, rxAgeMs);
-    }
-#endif
 
     switch (status.state)
     {
@@ -431,7 +397,7 @@ void parseCAN_chs(void *arg)
     do
     {
       lastCANChassisTick = millis();
-      lpChassisFrameCount = lpChassisFrameCount + 1;
+      ++lpChassisFrameCount;
 
       // External diagnostic-tool detection (auto-pause of live polling).
       // A scanner addresses the Haldex from the chassis side; these request IDs
@@ -470,7 +436,7 @@ void parseCAN_chs(void *arg)
       if (analyzerMode || analyzerSerial)
       {
         analyzerQueueFrame(rx_message_chs, 0);
-        haldex_can_send(rx_message_chs, (10 / portTICK_PERIOD_MS));
+        transmitHaldexCopy(rx_message_chs, tx_message_hdx);
         continue;
       }
 
@@ -850,23 +816,24 @@ void parseCAN_hdx(void *arg)
 #endif
 
 #ifdef OH_CAN_HALDEX_MCP2515
-    if (!haldex_can_receive(rx_message_hdx)) {
-      vTaskDelay(pdMS_TO_TICKS(1));
+    // MCP2515 has no blocking receive - poll and yield 1 tick when idle. The
+    // inner drain loop below still empties every buffered frame each pass.
+    if (!haldex_can_receive(rx_message_hdx, 0))
+    {
+      vTaskDelay(1);
       continue;
     }
-    do
-    {
 #else
     if (twai_receive_v2(twai_bus_1, &rx_message_hdx, portMAX_DELAY) != ESP_OK)
     {
       vTaskDelay(pdMS_TO_TICKS(10));
       continue;
     }
+#endif
     do
     {
-#endif
       lastCANHaldexTick = millis();
-      lpHaldexFrameCount = lpHaldexFrameCount + 1;
+      ++lpHaldexFrameCount;
 
       // Analyzer mode: queue for GVRET/SLCAN and forward untouched, skipping control logic.
       if (analyzerMode || analyzerSerial)
@@ -1049,7 +1016,7 @@ void parseCAN_hdx(void *arg)
 
       twai_transmit_v2(twai_bus_0, &rx_message_hdx, (10 / portTICK_PERIOD_MS));
 #ifdef OH_CAN_HALDEX_MCP2515
-    } while (haldex_can_receive(rx_message_hdx));
+    } while (haldex_can_receive(rx_message_hdx, 0));
 #else
     } while (twai_receive_v2(twai_bus_1, &rx_message_hdx, 0) == ESP_OK);
 #endif

@@ -1,6 +1,6 @@
-#include <OpenHaldexC6_can.h>
 #include <OpenHaldexC6_Analyzer.h>
 #include <OpenHaldexC6_defs.h>
+#include <OpenHaldexC6_can.h> // haldex_can_send() - board-agnostic Haldex TX
 
 // to Meatro / Chris: thank you for this (and other) contributions!
 

@@ -99,12 +99,18 @@ void readEEP() // function to read stored preferences into runtime variables
     tcForceMode = pref.getBool("tcForceMode", false);                       // load tc force mode
     extBtnForceMode = pref.getBool("extBtnForceMode", false);               // load ext button force mode
     hazardForceMode = pref.getBool("hazardForceMode", false);               // load hazard force mode
-    disableOnboardButton = pref.getBool("dsbOnboardBtn", false);            // load disable onboard button
-    disableExternalButton = pref.getBool("dsbExtBtn", false);               // load disable external button
+    disableOnboardButton = pref.getBool("dsbOnboardBtn", disableOnboardButton);   // load disable onboard button (board-aware default)
+    disableExternalButton = pref.getBool("dsbExtBtn", disableExternalButton);     // load disable external button (board-aware default)
     fixHunting = pref.getBool("fixHunting", false);                         // load Motor_11 BPK-mode toggle
     canSleepEnabled = pref.getBool("canSleepEn", true);                     // load CAN-wake light sleep enable
     canSleepAggressive = pref.getBool("canSleepAggr", false);               // load aggressive CAN sleep enable
     lpWakeThresholdFps = pref.getUShort("lpWakeFps", 1100);                  // load LP wake threshold (fps)
+#if !BOARD_CAN_SLEEP_SUPPORTED
+    // T-2CAN has no CAN transceiver standby (no RS pins) -> CAN sleep is not
+    // available. Force it off regardless of any stored value.
+    canSleepEnabled = false;
+    canSleepAggressive = false;
+#endif
     ledBrightness = pref.getUChar("ledBrightness", led_brightness_default); // load LED brightness
 
     otaUpdate = pref.getBool("otaUpdate", false);                          // load OTA update flag

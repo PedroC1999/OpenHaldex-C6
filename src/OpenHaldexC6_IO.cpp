@@ -2,6 +2,15 @@
 #include <OpenHaldexC6_can.h>
 #include <OpenHaldexC6_WiFi.h>
 
+// ---------------------------------------------------------------------------
+// CAN-wake light sleep is an ESP32-C6-only feature: it relies on the CAN
+// transceiver slope-control (RS) pins to park the TCAN1044s in standby and on
+// GPIO wake ISRs on the CAN_RX pins. The LilyGo T-2CAN (ESP32-S3) has neither
+// (RS pins are -1), so the whole subsystem is compiled out there
+// (BOARD_CAN_SLEEP_SUPPORTED == 0) and WiFi/IO stay always-on.
+// ---------------------------------------------------------------------------
+#if BOARD_CAN_SLEEP_SUPPORTED
+
 // Low-power state: 
 //   WATCHING = WiFi Active, Normal IO
 //   SLEEPING = WiFi Off, LED off, and (if canSleepAggressive) CAN transceivers in standby
@@ -83,12 +92,6 @@ static void lpDetachWakeIsrs()
 // standby so the TWAI driver has uncontested ownership of the RX pin.
 static void lpSetTransceiverStandby(bool standby)
 {
-#ifdef OH_BOARD_T2CAN
-  // Neither T-2CAN transceiver exposes a standby/slope-control GPIO. Keep the
-  // CAN controllers running; the regular low-power Wi-Fi behaviour remains.
-  (void)standby;
-  return;
-#else
   if (standby == lpTransceiversStandby) return;
   if (standby)
   {
@@ -105,7 +108,6 @@ static void lpSetTransceiverStandby(bool standby)
     canWakeRequest = false;
   }
   lpTransceiversStandby = standby;
-#endif
 }
 
 static void lpSuspendBackgroundTasks()
@@ -138,10 +140,12 @@ static void lpResumeBackgroundTasks()
   lpTasksSuspended = false;
 }
 
+#endif // BOARD_CAN_SLEEP_SUPPORTED
+
 void setupIO()
 {
-  // using the TCAN1044 for CAN control
-#if !defined(OH_BOARD_T2CAN)
+#if CAN0_RS >= 0
+  // using the TCAN1044 for CAN control (C6 PCB only; the T-2CAN has no RS pins)
   pinMode(CAN0_RS, OUTPUT);   // gpio for controlling can_0 state - enabled or disabled
   pinMode(CAN1_RS, OUTPUT);   // gpio for controlling can_0 slope - enabled or disabled
   digitalWrite(CAN0_RS, LOW); // set chip enable
@@ -153,10 +157,8 @@ void setupIO()
   pinMode(gpio_hb_out, OUTPUT);    // gpio for handbrake out signal
   pinMode(gpio_brake_out, OUTPUT); // gpio for brake out signal
 
-#if OH_HAS_RGB_LED
   strip.begin();            // begin RGB LED onboard
   strip.setBrightness(255); // always full library scale; brightness controlled via color values
-#endif
 }
 
 void modeChange(void)
@@ -273,6 +275,17 @@ void setupButtons()
   btnMode_ext.bind(Event_KeyPress, 0, &modeChangeExt);         // short press: cycle mode (external button)
   btnMode_ext.bind(Event_LongKeyPress, 0, &modeChangeExtLong); // long press: force mode (external button)
   // btnMode.bind(Event_KeyDown, 0, &modeChangeExtLongOff);
+
+#ifdef OH_BOARD_T2CAN
+  // T-2CAN has no onboard buttons - the mode pins are broken out to spare
+  // GPIOs so a button can optionally be wired. Force internal pulldowns
+  // (applied after InterruptButton configures the pins) so an unconnected pin
+  // reads a stable LOW (= not pressed, since pressedState is HIGH): this
+  // prevents spurious mode changes and, critically, spurious long-press WiFi
+  // resets. The buttons also default disabled (see globals) as belt-and-braces.
+  pinMode(gpio_mode, INPUT_PULLDOWN);
+  pinMode(gpio_mode_ext, INPUT_PULLDOWN);
+#endif
 }
 
 void updateTriggers(void *arg)
@@ -283,6 +296,7 @@ void updateTriggers(void *arg)
     hasCANChassis = (lastCANChassisTick > 0) && ((now - (uint32_t)lastCANChassisTick) <= canHealthTimeoutMs); // 1000ms timeout for CAN health - if we haven't received a message in 1000ms, consider the CAN connection unhealthy
     hasCANHaldex = (lastCANHaldexTick > 0) && ((now - (uint32_t)lastCANHaldexTick) <= canHealthTimeoutMs);    // 1000ms timeout for CAN health - if we haven't received a message in 1000ms, consider the CAN connection unhealthy
 
+#if BOARD_CAN_SLEEP_SUPPORTED
     // Low-power WiFi management
     // Standalone: Haldex bus fps. OEM: chassis bus fps.
     //
@@ -345,10 +359,8 @@ void updateTriggers(void *arg)
             DEBUG("Low power: no clients + CAN idle (%lu fps) - shutting down WiFi+LED%s",
                   (unsigned long)(isStandalone ? lpHaldexFps : lpChassisFps),
                   canSleepAggressive ? " + transceivers standby (ISR wake)" : "");
-#if OH_HAS_RGB_LED
             strip.setLedColorData(led_channel, 0, 0, 0);
             strip.show();
-#endif
             // Aggressive: shutdown transceivers immediately and suspend background
             // periodic tasks. Wake is purely ISR-driven on the CAN_RX pins.
             if (canSleepAggressive)
@@ -401,6 +413,7 @@ void updateTriggers(void *arg)
         break;
       }
     }
+#endif // BOARD_CAN_SLEEP_SUPPORTED
 
     // Analyzer mode: keep buttons + CAN recovery, but skip brake/handbrake IO outputs.
     if (analyzerMode)
@@ -446,7 +459,6 @@ void updateTriggers(void *arg)
 
     if (!lowPowerMode)
     {
-#if OH_HAS_RGB_LED
       switch (state.mode)
       {
       case 0:
@@ -475,9 +487,9 @@ void updateTriggers(void *arg)
         break;
       }
       strip.show(); // Update the LED strip to reflect the new colour settings
-#endif
     }
 
+#if BOARD_CAN_SLEEP_SUPPORTED
     // Aggressive sleep: block on a task notification with a long timeout
     // instead of polling every 500ms. The CAN_RX wake ISRs give a
     // notification on any bus activity, so wake latency stays ~ISR + 1
@@ -492,5 +504,8 @@ void updateTriggers(void *arg)
     {
       vTaskDelay(updateTriggersRefresh / portTICK_PERIOD_MS);
     }
+#else
+    vTaskDelay(updateTriggersRefresh / portTICK_PERIOD_MS);
+#endif
   }
 }

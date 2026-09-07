@@ -17,7 +17,7 @@ Version: 8.00.3
 
 void setup()
 {
-#if enableDebug || detailedDebug || detailedDebugCAN || detailedDebugWiFi || detailedDebugEEP || detailedDebugIO || OH_CAN_DIAGNOSTICS
+#if enableDebug || detailedDebug || detailedDebugCAN || detailedDebugWiFi || detailedDebugEEP || detailedDebugIO
   Serial.begin(500000);                // start serial at a high baud rate for debugging
   Serial.setTxTimeoutMs(10);           // set a small timeout for Serial writes to prevent blocking if the Serial Monitor is not open
   DEBUG("OpenHaldex-C6 Launching..."); // debug message to indicate startup
@@ -33,11 +33,10 @@ void setup()
   setupAPI();       // setup API handling for WebServer
   setupOTA();       // setup Over-the-Air Updates
 
-  // Power management: when CAN sleep is enabled, scale CPU frequency down
-  // The original OpenHaldex-S3 T-2CAN firmware does not enable automatic
-  // light sleep. Keep the native chassis TWAI controller continuously awake
-  // on this target; this is a reliability preference, not a power saving one.
-#ifndef OH_BOARD_T2CAN
+#if BOARD_CAN_SLEEP_SUPPORTED
+  // Power management: when CAN sleep is enabled, scale CPU frequency down.
+  // ESP32-C6 only - the CPU frequency ranges here (and the CAN sleep feature)
+  // are specific to that target; the T-2CAN/ESP32-S3 build has no CAN sleep.
   if (canSleepEnabled)
   {
     esp_pm_config_t pm_cfg = {
@@ -107,15 +106,11 @@ void loop()
     // just here to show a visual indication of the WiFi reboot
     for (int i = 0; i <= 3; i++)
     {
-#if OH_HAS_RGB_LED
       strip.setLedColorData(led_channel, ledBrightness, ledBrightness, ledBrightness);
       strip.show();
-#endif
       vTaskDelay(pdMS_TO_TICKS(50));
-#if OH_HAS_RGB_LED
       strip.setLedColorData(led_channel, 0, 0, 0);
       strip.show();
-#endif
       vTaskDelay(pdMS_TO_TICKS(50));
     }
 

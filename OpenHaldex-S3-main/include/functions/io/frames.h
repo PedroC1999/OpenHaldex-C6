@@ -1,0 +1,26 @@
+﻿#pragma once
+
+void Gen1_frames10();
+void Gen1_frames20();
+void Gen1_frames25();
+void Gen1_frames100();
+void Gen1_frames200();
+void Gen1_frames1000();
+void Gen2_frames10();
+void Gen2_frames20();
+void Gen2_frames25();
+void Gen2_frames100();
+void Gen2_frames200();
+void Gen2_frames1000();
+void Gen4_frames10();
+void Gen4_frames20();
+void Gen4_frames25();
+void Gen4_frames100();
+void Gen4_frames200();
+void Gen4_frames1000();
+void Gen5_frames10();
+void Gen5_frames20();
+void Gen5_frames25();
+void Gen5_frames100();
+void Gen5_frames200();
+void Gen5_frames1000();

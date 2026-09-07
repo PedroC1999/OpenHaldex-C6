@@ -77,11 +77,51 @@ async function fetchJson(url, options) {
   }
 }
 
+// Board-aware UI tweaks driven by /api/settings ("board", "boardName",
+// "canSleepSupported"). Runs once, idempotently. On the default ESP32-C6 board
+// nothing changes; on the LilyGo T-2CAN (board == "openhaldex-s3") it retitles
+// the header, hides the unsupported CAN-sleep controls, and reveals the
+// "optional wiring" notes for the LED / buttons / brake-handbrake IO.
+let boardUiApplied = false;
+function applyBoardUi(data) {
+  if (boardUiApplied || !data) return;
+  boardUiApplied = true;
+
+  const boardName = data.boardName || "OpenHaldex";
+
+  // Retitle header + document to the reported board name.
+  const h1 = document.querySelector("header h1");
+  if (h1 && data.boardName) h1.textContent = boardName;
+  if (data.boardName) document.title = boardName;
+
+  // Reflect the AP SSID default in the WiFi SSID placeholder.
+  const ssidInput = document.getElementById("wifiSsidInput");
+  if (ssidInput && data.boardName) ssidInput.placeholder = boardName;
+
+  // Hide CAN sleep controls on hardware that doesn't support it (no RS pins).
+  if (data.canSleepSupported === false) {
+    const canSleepSection = document.getElementById("canSleepSection");
+    if (canSleepSection) canSleepSection.style.display = "none";
+  }
+
+  // Surface the "optional / requires wiring" notes on the T-2CAN build.
+  if (data.board === "openhaldex-s3") {
+    const outNote = document.getElementById("t2canOutputNote");
+    if (outNote) outNote.style.display = "";
+    const ctrlNote = document.getElementById("t2canControllerNote");
+    if (ctrlNote) ctrlNote.style.display = "";
+  }
+}
+
 // initialise stored settings (async function)
 async function initStoredSettings() {
   // initialise stored settings and parse them
   try {
     const data = await fetchJson("/api/settings");
+    // Apply board-specific UI adjustments before populating fields. This is a
+    // no-op on the ESP32-C6 (default) board; only the T-2CAN/ESP32-S3 build
+    // changes anything here.
+    applyBoardUi(data);
     // values
     document.getElementById("haldexGeneration").value =
       data.haldexGeneration || 1;

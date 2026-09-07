@@ -1,0 +1,97 @@
+﻿name: Sync Release Assets To Website
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to sync (example: v1.0)"
+        required: true
+        type: string
+  release:
+    types: [published, prereleased, released, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG_RAW: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Normalize release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${RELEASE_TAG_RAW}"
+          if [[ -z "$TAG" ]]; then
+            echo "Release tag is empty" >&2
+            exit 1
+          fi
+          if [[ "$TAG" != v* ]]; then
+            TAG="v$TAG"
+          fi
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
+          echo "Using release tag: $TAG"
+
+      - name: Download release binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "deploy/${RELEASE_TAG}"
+          BASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}"
+          for f in bootloader.bin partitions.bin firmware.bin littlefs.bin version.json; do
+            echo "Downloading $f"
+            curl -fL --retry 5 --retry-delay 2 --retry-all-errors \
+              "$BASE_URL/$f" -o "deploy/${RELEASE_TAG}/$f"
+          done
+
+      - name: Publish latest metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "deploy/${RELEASE_TAG}/version.json" deploy/version.json
+          cat > deploy/manifest.json <<EOF
+          {
+            "name": "OpenHaldex S3",
+            "builds": [
+              {
+                "chipFamily": "ESP32-S3",
+                "parts": [
+                  { "path": "${RELEASE_TAG}/bootloader.bin", "offset": 0 },
+                  { "path": "${RELEASE_TAG}/partitions.bin", "offset": 32768 },
+                  { "path": "${RELEASE_TAG}/firmware.bin", "offset": 65536 },
+                  { "path": "${RELEASE_TAG}/littlefs.bin", "offset": 7929856 }
+                ]
+              }
+            ]
+          }
+          EOF
+
+      - name: Verify deploy files
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in version.json manifest.json; do
+            test -s "deploy/$f" || { echo "Missing deploy/$f"; exit 1; }
+          done
+          for f in bootloader.bin partitions.bin firmware.bin littlefs.bin version.json; do
+            test -s "deploy/${RELEASE_TAG}/$f" || { echo "Missing deploy/${RELEASE_TAG}/$f"; exit 1; }
+          done
+          ls -lh deploy
+          ls -lh "deploy/${RELEASE_TAG}"
+
+      - name: Upload to website
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.6
+        with:
+          server: ${{ secrets.WEB_FTP_SERVER }}
+          username: ${{ secrets.WEB_FTP_USERNAME }}
+          password: ${{ secrets.WEB_FTP_PASSWORD }}
+          protocol: ftps
+          port: 21
+          local-dir: deploy/
+          server-dir: ${{ secrets.WEB_FTP_TARGET_DIR }}
+          dangerous-clean-slate: true

@@ -10,7 +10,7 @@
 void haldexLearnTask(void *arg)
 {
   const uint32_t settleMs = 300;
-  uint8_t lastValid = 0;
+  uint8_t peak = 0; // highest engagement recorded so far (monotonic hold)
 
   for (uint16_t cf = 0; cf <= 100; cf++)
   {
@@ -24,16 +24,23 @@ void haldexLearnTask(void *arg)
 
     vTaskDelay(settleMs / portTICK_PERIOD_MS);
 
-    const uint8_t eng = constrain(received_haldex_engagement, 0, 100);
-    if (eng == 0 && cf > 0)
+    uint8_t eng = received_haldex_engagement;
+
+    // Engagement must rise (or plateau) as the requested lock climbs - it can
+    // never physically fall. A reading below the running peak is a data fault
+    // (e.g. a bad byte at the top end that returns 0 or a lower value), so hold
+    // the highest lock achieved so far instead of saving the drop. This keeps
+    // "the last available highest lock" as the learned value for higher requests.
+    if (eng < peak)
     {
-      haldexLearnTable[cf] = lastValid;
+      eng = peak; // last available highest lock remains
     }
     else
     {
-      lastValid = eng;
-      haldexLearnTable[cf] = eng;
+      peak = eng;
     }
+
+    haldexLearnTable[cf] = eng;
   }
 
   if (!haldexLearnCancel)
@@ -47,14 +54,9 @@ void haldexLearnTask(void *arg)
     haldexLearnTableValid = anyNonZero;
     haldexLearnStep = anyNonZero ? 101 : 102; // 101 = complete OK, 102 = complete but no data
   }
-  else
-  {
-    haldexLearnTableValid = false;
-  }
 
   haldexLearnActive = false;
   haldexLearnCF     = 0;
-  restoreHaldexLearnState();
   vTaskDelete(NULL);
 }
 
@@ -193,19 +195,17 @@ void showHaldexState(void *arg)
       // isBusFailure live in canBusRecovery() - don't read/drain alerts here
       // (that would consume them before the recovery poll can see them).
       twai_status_info_t twaistatus0;
-#ifndef OH_CAN_HALDEX_MCP2515
-      twai_status_info_t twaistatus1;
-#endif
       twai_get_status_info_v2(twai_bus_0, &twaistatus0);
-#ifndef OH_CAN_HALDEX_MCP2515
-      twai_get_status_info_v2(twai_bus_1, &twaistatus1);
-#endif
       DEBUG("");
       DEBUG("CAN-BUS Details:");
       DEBUG("    Bus0 state: %d  RX buffered: %lu  RX missed: %lu  RX overrun: %lu",
             (int)twaistatus0.state, twaistatus0.msgs_to_rx,
             twaistatus0.rx_missed_count, twaistatus0.rx_overrun_count);
 #ifndef OH_CAN_HALDEX_MCP2515
+      // Bus 1 is only a TWAI controller on the C6; on the T-2CAN the Haldex
+      // bus is an MCP2515 with no TWAI status to report.
+      twai_status_info_t twaistatus1;
+      twai_get_status_info_v2(twai_bus_1, &twaistatus1);
       DEBUG("    Bus1 state: %d  RX buffered: %lu  RX missed: %lu  RX overrun: %lu",
             (int)twaistatus1.state, twaistatus1.msgs_to_rx,
             twaistatus1.rx_missed_count, twaistatus1.rx_overrun_count);
